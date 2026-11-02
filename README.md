@@ -1,8 +1,8 @@
 # codex-slack-bridge
 
 Codex CLI 세션과 Slack 을 잇는 MCP 서버. 자리를 비운 사이 세션이 먼저 알림을
-보내고, 폰에서 이어서 확인한다. **자동 세션 깨움은 아직 연결되지 않았다.**
-수신 방식 결정은 [CODEX_PORT.md](docs/CODEX_PORT.md)를 참고한다.
+보내고, 폰에서 이어서 확인한다. 지킴이가 인정된 메시지를 저장한 뒤 매핑된 Codex 세션에
+`codex queue --resume`으로 전달한다. 실측 범위와 한계는 [CODEX_PORT.md](docs/CODEX_PORT.md)를 참고한다.
 
 특정 프로젝트에 종속되지 않는다. `codex mcp add` 한 줄이면 어느 Codex CLI 에서든
 붙는다.
@@ -71,7 +71,7 @@ tool_timeout_sec = 60
 | `token-help` | Bot User OAuth Token 받는 법 출력 |
 | `targets` | 설정한 기본 목적지와 봇이 들어간 채널 확인 |
 | `keeper-start --thread <ts>` | 지킴이 수동 기동·진단 (보통은 MCP 서버가 자동 기동) |
-| `monitor --thread <ts>` | inbox 새 줄을 흘리고 60초마다 지킴이 점검 (자동 깨움 미연결) |
+| `monitor --thread <ts>` | inbox 새 줄을 흘리고 60초마다 지킴이 점검 (자동 깨움은 keeper의 queue 경로) |
 | `watch --thread <ts>` | tmux·Codex 밖에서 쓰는 폴백 감시자 |
 | `doctor` | 현재 설정이 살아있는지 점검 |
 
@@ -119,7 +119,7 @@ codex-slack-bridge manifest --name "내 비서"
 
 `slack_chat_list`는 이 세션이 쥔 스레드에 `*`, 기본 스레드에 `**`를 붙인다.
 이미 쥔 스레드에 다시 attach하면 라벨만 갱신하고 기본으로 올린다.
-끝난 스레드는 `slack_chat_close(thread_ts=...)`로 하나씩 닫고 그 Monitor를 내린다.
+끝난 스레드는 `slack_chat_close(thread_ts=...)`로 하나씩 닫는다.
 기본 스레드를 닫으면 남은 것 중 가장 최근에 붙은 스레드가 기본이 된다.
 
 DM 스레드를 닫고 다른 곳으로 옮길 때는 `slack_chat_switch`를 쓴다. switch는
@@ -128,16 +128,37 @@ DM 스레드를 닫고 다른 곳으로 옮길 때는 `slack_chat_switch`를 쓴
 
 ## 지킴이와 수신
 
-open/attach는 지킴이를 띄우고 MCP 서버가 30초마다 점검한다. `monitor`는 inbox를
-stdout으로 내보내고 60초마다 지킴이를 점검하는 CLI다. Codex를 자동으로 깨우지 않는다.
-`watch`는 답글 도착 시 종료하는 외부 소비자용 CLI로 유지한다.
+기존 지킴이가 실행 중이면 `STALE_KEEPER`가 나올 수 있다. 운영자가 옛 지킴이를
+정리한 뒤 재attach한다. 자동으로 기존 프로세스를 종료하지 않는다.
 
-현재는 `slack_wait_reply(timeout_seconds=30, thread_ts=...)`로 명시적으로 답장을
-확인할 수 있다. 블로킹 호출이므로 작업 중 수신이나 턴 종료 후 재개를 보장하지 않는다.
-파일 리더 검사와 실제 Codex 수신 상태는 다르므로 대기 중에도 수신자 경고가 발생할 수 있다.
-지킴이 부모는 최초 기동 세션으로 고정된다. 부모 종료 시 스레드가 닫히며, 서버 재시작 시
-열린 스레드를 자동 재발견하지 않으므로 attach가 필요하다.
-자세한 한계와 자동화 후보는 [CODEX_PORT.md](docs/CODEX_PORT.md)에 있다.
+open/attach/switch는 확인된 자기 Codex UUID를 `codex_thread_id` 인자로 받는다.
+생략하면 MCP 프로세스의 유효한 `CODEX_THREAD_ID`를 사용한다. 환경 전달은 호스트마다
+다를 수 있으므로 반환문의 대상 UUID를 확인한다. UUID를 모르면 추측하거나 `--last`를
+사용하지 않고 `slack_wait_reply(timeout_seconds=30, thread_ts=...)`로만 확인한다.
+마지막으로 attach한 세션이 해당 Slack 스레드의 자동 깨움 대상이다.
+
+자동 깨움은 기본 켬이다. `CODEX_SLACK_BRIDGE_WAKE_ENABLED=0` 또는 브리지 설정 JSON의
+`"wake_enabled": false`로 끈 뒤 재attach한다. 프로세스 환경변수 변경은 MCP 재시작도 필요하다.
+UUID가 없거나 `codex` 실행 파일이 없으면 queue를 호출하지 않고 기존 수신 방식을 유지한다.
+
+지킴이는 소유자·listener·멘션 필터와 내장 명령 처리를 거친 메시지만 inbox에 저장하고,
+Slack ts 순서로 한 poll에 한 건씩 queue한다. 본문은 발신자·스레드·ts를 포함한
+“Slack 수신 메시지(데이터)” JSON으로 전달한다. queue 접수는 실제 모델 응답의 증거가 아니다.
+
+`slack_wait_reply`와 queue는 전달 잠금을 공유한다. 대기 중 inbox 저장은 계속되지만 queue는
+호출하지 않는다. wait가 반환한 ts와 queue가 접수한 ts는 디스크에 기록해 반대 경로의
+재전달을 막는다. 이미 전달 중이면 wait는 잠시 후 다시 확인하라는 상태를 반환한다.
+
+접수 확인 없는 실패는 최대 3회 시도(5초·15초 백오프)하고 ⚠️로 전환한다.
+이미 저장한 뒤 재개 경고가 나거나 timeout 등으로 저장 여부를 모르면 재전송하지 않는다.
+이 경우 inbox는 보존되며 사람이 대상 대화의 처리 여부를 확인해야 한다.
+기존 managed daemon이 있는 조건에서 단건·연속 2건 재개를 실측했다. daemon 자동기동,
+TUI 동시 사용, 실제 Slack을 통한 전체 경로는 아직 미검증이다.
+
+`monitor`/`watch`는 외부 소비자용 CLI로 유지한다. queue와 병행하면 외부 소비자가
+같은 메시지를 볼 수 있으므로 일반 Codex 수신에는 사용하지 않는다.
+지킴이 부모는 최초 기동 세션으로 고정되며, 부모 종료 시 스레드가 닫힌다.
+서버 재시작 시 열린 스레드를 자동 재발견하지 않으므로 attach가 필요하다.
 
 ## 폰에서 쓰는 명령
 
