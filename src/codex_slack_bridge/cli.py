@@ -787,7 +787,7 @@ def cmd_keeper(argv: list[str]) -> None:
                 pending.append(message_ts)
 
             # Inbox append/fsync precedes delivery. Also retry backlog after a restart.
-            wake.tick(thread)
+            wake.schedule(thread, conf, bot_user_id)
 
             # 유예가 지난 것 중 아직 답이 안 붙은 것만 알린다.
             still = []

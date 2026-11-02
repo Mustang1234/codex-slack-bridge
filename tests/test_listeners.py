@@ -178,10 +178,10 @@ class ListenerTests(unittest.TestCase):
             listing = server.slack_chat_list()
         self.assertEqual(listing.splitlines(), [
             "표시: ** 기본 스레드, * 이 세션이 쥔 스레드",
-            "100.0  마감 12:00  지킴이없음    스레드 listeners=UA,UB  채널 전체 listeners=UC",
-            "200.0  마감 12:00  지킴이없음  Missing  스레드 listeners=0  채널 전체 listeners=UC",
-            "300.0  마감 12:00  지킴이없음  Empty  스레드 listeners=0  채널 전체 listeners=0",
-            "400.0  마감 12:00  지킴이없음  DM",
+            "100.0  마감 12:00  지킴이없음    스레드 listeners=UA,UB  채널 전체 listeners=UC  wake=off; 마지막 오류=-",
+            "200.0  마감 12:00  지킴이없음  Missing  스레드 listeners=0  채널 전체 listeners=UC  wake=off; 마지막 오류=-",
+            "300.0  마감 12:00  지킴이없음  Empty  스레드 listeners=0  채널 전체 listeners=0  wake=off; 마지막 오류=-",
+            "400.0  마감 12:00  지킴이없음  DM  wake=off; 마지막 오류=-",
         ])
 
     def test_owner_gate_and_dm(self):
@@ -246,10 +246,11 @@ class ListenerTests(unittest.TestCase):
              patch.object(cli, "_check_session_health") as health, \
              patch.object(cli.time, "sleep", side_effect=sleep), \
              patch.object(cli.wake.shutil, "which", return_value="/mock/codex"), \
-             patch.object(cli.wake.subprocess, "run", return_value=subprocess.CompletedProcess(
-                 [], 0, f"Queued message receipt for thread {target}.", ""
-             )) as queue, \
+             patch.object(cli.wake.subprocess, "Popen") as queue, \
+             patch.object(cli.wake, "schedule", side_effect=cli.wake.tick), \
              patch.object(cli, "_log"):
+            queue.return_value.communicate.return_value = (f"Queued message receipt for thread {target}.", "")
+            queue.return_value.returncode = 0
             cli.cmd_keeper(["--thread", "100.0"])
         self.assertEqual([m["user"] for m in threads.read_inbox("100.0", 0)], ["UA", "UB"])
         queue.assert_called_once()

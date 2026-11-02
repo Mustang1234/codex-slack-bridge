@@ -33,7 +33,7 @@ THREADS_DIR = Path(
     os.environ.get("CODEX_SLACK_BRIDGE_THREADS_DIR")
     or os.path.expanduser("~/.codex-slack-bridge/threads")
 )
-KEEPER_PROTOCOL = "inbox-queue-v2"
+KEEPER_PROTOCOL = "inbox-ledger-v3"
 SIDECAR_SUFFIXES = (".inbox.jsonl", ".lock", ".keeper.log", ".delivery.lock")
 
 
@@ -157,7 +157,11 @@ def append_inbox(thread_ts: str, msg: dict, summary: str) -> Path:
         "text": msg.get("text", ""),
         "summary": summary,
     }
-    return _append_inbox_record(thread_ts, record)
+    # Keeper and wait can both ingest. Serialize append and deduplicate by Slack ts.
+    with _patch_lock(thread_ts):
+        if any(str(m.get("ts")) == str(record["ts"]) for m in read_inbox(thread_ts, 0)):
+            return _sidecar_path(thread_ts, ".inbox.jsonl")
+        return _append_inbox_record(thread_ts, record)
 
 
 def append_inbox_event(thread_ts: str, event: str) -> Path:

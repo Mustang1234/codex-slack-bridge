@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from . import slack
 from . import threads
 from . import config as cfg
+from . import wake
 
 POLL_INTERVAL = 5.0       # Slack 레이트리밋은 넉넉하다. ntfy 의 25초를 따를 이유가 없다.
 WARN_LEAD = 10 * 60       # 마감 10분 전 예고
@@ -485,7 +486,7 @@ def close_thread(
     if only_if_notified and not notified:
         return False
     slack.set_session_status(token, channel, thread_ts, "closed")
-    threads.patch(
+    wake.close_delivery(
         thread_ts, closed=True, closed_at=time.time(), reason=reason, resumable=resumable,
         listeners=[],
     )
@@ -601,7 +602,8 @@ def poll_new(token: str, chat: Chat) -> list[dict]:
 
 
 def wait_reply(token: str, bot_user_id: str, timeout: float, thread_ts: str | None = None,
-               after_ts: float = 0, owner_id: str = "") -> tuple[str, list[dict]]:
+               after_ts: float = 0, owner_id: str = "",
+               wait_lease: str = "", conf: cfg.Config | None = None) -> tuple[str, list[dict]]:
     """답장이 올 때까지 블로킹한다.
 
     반환하는 상태는 셋이다.
@@ -611,6 +613,7 @@ def wait_reply(token: str, bot_user_id: str, timeout: float, thread_ts: str | No
     """
     chat = current(thread_ts)
     until = time.time() + timeout
+    conf = conf or cfg.Config(token, chat.channel, owner_id)
     fails = 0
 
     while True:
@@ -640,26 +643,25 @@ def wait_reply(token: str, bot_user_id: str, timeout: float, thread_ts: str | No
             chat.warned = True
             threads.patch(chat.thread_ts, warned=True)
 
+        poll_error = None
         try:
             listeners = list(set(state.get("listeners", [])) |
                              set(cfg.channel_listeners(chat.channel)))
-            fresh = [m for m in poll_new(token, chat)
-                     if float(m.get("ts", 0)) > after_ts
-                     and is_for_me(m, bot_user_id, owner_id,
-                                   bool(state.get("require_mention")), listeners)
-                     and not parse_command(strip_mention(m.get("text", ""), bot_user_id))]
+            # Polling is intake only. Delivery always comes from the durable inbox.
+            for message in slack.conversations_replies(token, chat.channel, chat.thread_ts):
+                if (str(message.get("ts")) != chat.thread_ts
+                        and wake.ts(message.get("ts")) > wake.ts(state.get("last_seen_ts"))
+                        and is_for_me(message, bot_user_id, conf.owner_id,
+                                      bool(state.get("require_mention")), listeners)
+                        and not parse_command(strip_mention(message.get("text", ""), bot_user_id))):
+                    threads.append_inbox(chat.thread_ts, message, describe(message))
             fails = 0
-        except slack.SlackError:
-            # 단발 실패는 넘어간다. 커서를 그대로 두고 다음 주기에 다시 긁으므로
-            # 유실이 아니라 지연이 된다.
-            #
-            # 다만 계속 실패하면 조용히 삼키지 않는다. 그러면 "답장 없음" 과
-            # 구분이 안 되어, 사용자는 답을 보냈는데 기다리는 쪽은 아무 일도
-            # 없다고 믿는 상태가 된다. 실제로 그렇게 새고 있었다.
+        except slack.SlackError as error:
             fails += 1
-            if fails >= 3:
-                raise
-            fresh = []
+            poll_error = error
+        fresh = wake.consume_wait(chat.thread_ts, conf, bot_user_id, wait_lease)
+        if not fresh and poll_error and fails >= 3:
+            raise poll_error
 
         if fresh:
             if chat.warned:
