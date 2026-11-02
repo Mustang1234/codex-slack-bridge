@@ -135,6 +135,8 @@ open/attach/switch는 확인된 자기 Codex UUID를 `codex_thread_id` 인자로
 생략하면 MCP 프로세스의 유효한 `CODEX_THREAD_ID`를 사용한다. 환경 전달은 호스트마다
 다를 수 있으므로 반환문의 대상 UUID를 확인한다. UUID를 모르면 추측하거나 `--last`를
 사용하지 않고 `slack_wait_reply(timeout_seconds=30, thread_ts=...)`로만 확인한다.
+명시 UUID와 환경 UUID가 다르면 거부한다. 공유 MCP 서버/daemon의 환경은 호출자 신원과
+다를 수 있으므로 세션별 MCP를 사용하고 자기 UUID를 확인한다. 형식 검사는 소유권 증명이 아니다.
 마지막으로 attach한 세션이 해당 Slack 스레드의 자동 깨움 대상이다.
 
 자동 깨움은 기본 켬이다. `CODEX_SLACK_BRIDGE_WAKE_ENABLED=0` 또는 브리지 설정 JSON의
@@ -145,13 +147,16 @@ UUID가 없거나 `codex` 실행 파일이 없으면 queue를 호출하지 않�
 Slack ts 순서로 한 poll에 한 건씩 queue한다. 본문은 발신자·스레드·ts를 포함한
 “Slack 수신 메시지(데이터)” JSON으로 전달한다. queue 접수는 실제 모델 응답의 증거가 아니다.
 
-`slack_wait_reply`와 queue는 전달 잠금을 공유한다. 대기 중 inbox 저장은 계속되지만 queue는
-호출하지 않는다. wait가 반환한 ts와 queue가 접수한 ts는 디스크에 기록해 반대 경로의
-재전달을 막는다. 이미 전달 중이면 wait는 잠시 후 다시 확인하라는 상태를 반환한다.
+`slack_wait_reply`와 queue는 같은 inbox와 메시지별 영속 전달 기록을 사용한다.
+wait 대기 표식이 있으면 새 queue는 시작하지 않는다. 이미 claim된 ts는 wait에서 제외한다.
+지킴이는 별도 worker에서 queue 결과를 기다리므로 마감 점검을 막지 않는다.
+close/bind/wait는 프로세스 간 파일잠금을 최대 0.25초 기다린다. 닫힌 뒤 새 queue를
+시작하지 않지만, 이미 시작한 원격 요청은 취소할 수 없다.
 
-접수 확인 없는 실패는 최대 3회 시도(5초·15초 백오프)하고 ⚠️로 전환한다.
-이미 저장한 뒤 재개 경고가 나거나 timeout 등으로 저장 여부를 모르면 재전송하지 않는다.
-이 경우 inbox는 보존되며 사람이 대상 대화의 처리 여부를 확인해야 한다.
+프로세스 시작 자체의 실패만 최대 3회(5초·15초 백오프) 재시도한다.
+접수 후 경고나 접수 여부 미확인은 해당 ts를 재전송하지 않고 ⚠️로 표시한다.
+새 메시지가 오면 자동 깨움을 재판정한다. `slack_chat_list`에서 상태와 마지막 오류를 확인한다.
+미확정 메시지는 inbox에 보존되며 사람이 대상 대화의 처리 여부를 확인해야 한다.
 기존 managed daemon이 있는 조건에서 단건·연속 2건 재개를 실측했다. daemon 자동기동,
 TUI 동시 사용, 실제 Slack을 통한 전체 경로는 아직 미검증이다.
 

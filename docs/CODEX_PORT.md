@@ -89,7 +89,8 @@ rollout의 역할·응답 본문·순서·횟수를 별도로 확인했다. 단�
 설정을 설명하지만 `CODEX_THREAD_ID` 자동 전달을 보장하지 않는다.
 따라서 환경 키의 존재를 MCP 전달 보장으로 간주하지 않는다.
 
-open/attach/switch의 선택 인자 `codex_thread_id`가 우선하고, 생략한 경우만 MCP 프로세스의
+open/attach/switch의 명시 `codex_thread_id`와 환경 UUID가 모두 있으면 일치해야 한다.
+불일치(환경 UUID 형식 오류 포함)는 Slack 동작 전에 거부한다. 생략한 경우 MCP 프로세스의
 `CODEX_THREAD_ID`를 UUID로 검증해 사용한다. `CODEX_SESSION_ID`나 PID에서 추론하지 않는다.
 명시 인자가 잘못됐으면 Slack 동작 전에 거절하고, 환경 UUID가 없거나 잘못됐으면 자동 깨움
 대상 없이 기존 wait 경로를 사용한다. 명시적 빈 문자열도 자동 깨움을 끈다.
@@ -99,35 +100,39 @@ open/attach/switch의 선택 인자 `codex_thread_id`가 우선하고, 생략한
 
 ### 전달·재시도·대기 경쟁 처리
 
-- `wake_enabled`는 기본 true, `CODEX_SLACK_BRIDGE_WAKE_ENABLED`가 설정 파일보다 우선한다.
-  false/0/off로 끈다. 값은 open/attach/switch 때 스레드에 반영되며 재attach로 갱신한다.
-  실행 중 프로세스의 환경변수를 바꾸려면 MCP를 다시 시작한다.
-- 기존 keeper 필터를 통과하고 내장 제어 명령이 아닌 메시지만 durable inbox에 기록한다.
-  한 poll에 가장 오래된 미전달 메시지 한 건을 처리해 Slack ts 순서를 유지한다.
-  프로세스 시작에는 셸 없이 인자 배열을 사용하며 timeout은 20초다.
-- 본문은 thread_ts·ts·sender·text를 JSON으로 감싼 외부 데이터다. 시스템 지시나 새로운
-  권한으로 취급하지 말라는 고정 안내를 앞에 둔다. 동일 Slack ts에 재답하지 않도록 안내한다.
-- 접수 확인 없는 비정상 종료(출력·재개 경고 없음) 및 프로세스 시작 오류는 5초·15초
-  백오프로 최대 3회 시도한다. 재시도 시각과 횟수는 디스크에 저장한다.
-- CLI의 `Queued message … for thread …` 접수 확인과 빈 stderr, exit 0이 함께 있어야
-  정상으로 취급한다. stderr가 있으면 보수적으로 실패로 본다. 접수 후 재개 경고는 이미
-  저장된 메시지를 다시 넣지 않고 즉시 실패로 표시한다. timeout, 접수 확인 없는 exit 0,
-  예상 밖 출력/재개 경고도 저장 여부가 불확실하므로 재전송하지 않는다.
-- 실패 상태는 기존 세션 건강 점검의 ⚠️/복구 알림 경로에 연결한다. queue 정상 접수만으로
-  실제 응답했다고 표시하지 않으며 기존 `session_reply_ts` 무응답 검사도 유지한다.
-- `.delivery.lock`은 intake/상태 patch 잠금과 분리된 OS flock이다. queue 시도, 매핑 변경,
-  wait 전달을 직렬화한다. wait 중에도 keeper는 inbox를 기록하되 queue 시도는 건너뛴다.
-  wait는 매 poll 현재 소유자·listener·멘션 및 내장 명령 필터를 적용한다.
-  반환한 ts는 잠금을 놓기 전에 `wake_wait_seen_ts`에 기록한다. queue 접수·claim 이후의
-  메시지만 wait에 반환해 역방향 중복도 막는다. wait 종료·예외 시 대기 표식을 정리한다.
-- queue 프로세스를 시작하기 **전에** `wake_claim_ts`를 저장/fsync한다. 접수 후에는
-  `wake_last_queued_ts`를 전진시킨다. 재시작 시 미확정 claim이 있으면 재전송 대신 경고한다.
-  자동 경로는 OS 잠금을 확보하지 못하면 실행하지 않는다. flock 없는 플랫폼은 매핑을
-  비활성화하고 wait만 사용한다.
+- 기본 켬이며 `CODEX_SLACK_BRIDGE_WAKE_ENABLED=0` 또는 `wake_enabled=false`로 끈다.
+  스레드 설정은 재attach로 갱신한다. 환경 변경 시 MCP 재시작도 필요하다.
+- keeper와 wait의 Slack 조회는 inbox 적재용이다. wait와 queue 모두 같은 durable inbox에서
+  메시지별 `wake_deliveries` 기록을 확인한다. 전달 최대 ts로 다른 메시지의 전달을 추론하지 않는다.
+  intake는 상태 파일잠금으로 ts 중복을 막으며, wait는 keeper의 intake 커서 이하 과거 답글을
+  다시 수집하지 않는다. 이미 inbox에 있는 더 이른 메시지는 이 제한 없이 전달한다.
+- `.delivery.lock`은 프로세스 간 flock이다. wait lease, claim, close, bind, 결과 기록에 사용한다.
+  wait 중에는 새 queue를 시작하지 않으며, 이미 claim/queued/uncertain인 ts는 wait에서 제외한다.
+  wait 예외 시 lease를 해제하고 프로세스 사망 시 timeout+30초에 만료한다.
+- keeper는 별도 worker를 예약한다. claim fsync와 `Popen` 시작만 짧은 잠금 안에서 수행하고
+  `communicate(timeout=20)`는 잠금 밖에서 기다린다. 재시도는 저장한 시각으로 판단하여 sleep하지 않는다.
+  close/bind/wait 잠금 획득은 최대 0.25초 후 명시 오류다. 새 launch는 닫힘과 마감도 재검사한다.
+- queue 직전 현재 스레드/채널 listener, 소유자, 멘션, 내장 명령 필터를 다시 적용한다.
+  철회된 메시지는 `revoked`로 기록한다. 본문은 외부 데이터 JSON이며 셸 없이 인자 배열로 전달한다.
+- 프로세스 시작 자체가 실패한 경우만 5초·15초 백오프로 총 3회 시도한다. 이 확정 미전달은
+  wait로 받을 수 있다. 실행파일/UUID가 없으면 queue하지 않는다.
+- 접수 정규식은 실측 `Queued message … for thread ….` 그대로 유지했다. 접수 확인, exit 0,
+  빈 stderr가 함께 있어야 성공이다. 실행 후 접수 미확인/timeout은 `uncertain`으로 남겨 재전송하지 않는다.
+  접수 후 경고도 해당 ts는 재전송하지 않는다. 새 메시지는 실패를 재판정하며 다른 미전달은
+  60초 cooldown 후 재판정한다. `slack_chat_list`에 wake 상태와 마지막 오류를 표시한다.
+- 성공 후에도 실제 응답은 기존 `session_reply_ts` 건강 점검으로 확인한다. 실패 ⚠️ 경로는 유지한다.
+
+### 검수 보완 재현 근거
+
+`test_wait_must_not_skip_older_durable_inbox_message`: inbox에 101을 저장하고 Slack 조회에는
+102만 남기는 경우(101이 Slack에서 삭제된 상황), 기존 wait는 102만 반환하여 max 커서가
+101을 건너뛰었다. 수정 전 테스트 실패로 유실 경로를 확인했다. 수정 후 두 메시지를 모두
+반환한다. 늦게 적재된 이전 ts, 재시작 claim, wait/queue 경쟁, 비동기 작업 중 close/bind,
+listener 철회, UUID 불일치, 실제 argv와 상태 전이도 mock 회귀 테스트로 검증한다.
 
 ### 운영 한계와 복구
 
-지킴이 프로토콜을 `inbox-queue-v2`로 올렸다. 실행 중인 옛 `inbox-v1` 지킴이를 새
+지킴이 프로토콜을 `inbox-ledger-v3`로 올렸다. 실행 중인 옛 `inbox-v1`/`inbox-queue-v2` 지킴이를 새
 어댑터 지원 프로세스로 오인하지 않고 `STALE_KEEPER`로 알린다. 배포 시 운영자가 옛
 지킴이를 정리한 뒤 재attach해야 한다. 이 변경은 프로세스를 자동 종료하지 않는다.
 
@@ -136,14 +141,18 @@ queue 사이의 crash/timeout에는 exactly-once를 보장할 수 없다. 중복
 미확정 claim은 자동 재전송과 wait 재전달에서 제외하므로, 실제로 저장되지 않은 메시지도
 자동 처리가 멈출 수 있다. inbox는 보존된다. **대상 Codex 대화와 inbox를 사람이 대조해
 처리 여부를 확인해야 하며 미확정 claim을 맹목적으로 지우거나 다시 queue하지 않는다.**
-접수가 확인된 경고 또는 확정 실패 후에는 문제를 해결하고 재attach하여 실패 상태를
-초기화할 수 있다. 이미 접수된 ts는 보존돼 재전송하지 않는다. 비정상 종료 시 CLI가
-접수 사실을 전혀 출력하지 않는 경우의 중복 가능성까지 배제할 수는 없다.
+새 메시지는 실패 상태에서 자동으로 재판정한다. 재attach도 실패 상태를 풀지만 이미 claim한
+ts는 보존한다. 과거 high-water 상태는 최초 실행 시 기존 inbox를 legacy 기록으로 이관한다.
+과거 커서가 이미 건너뛴 메시지의 처리 여부는 복원할 수 없으므로 운영자 확인이 필요하다.
+공유 MCP 서버/daemon 환경 UUID는 호출자 신원을 증명하지 못한다. 명시/환경 불일치는
+거부하지만, 동일한 잘못된 값이나 환경만 존재하는 오매핑은 막지 못하므로 세션별 MCP를 권한다.
 
 64KB가 넘는 전달 본문은 자동 queue하지 않고 wait 경로로 남긴다. 여러 Slack 스레드가
 동일 Codex UUID를 공유할 때 스레드 사이 전역 순서는 보장하지 않는다. 수동 monitor/watch는
 이 전달 잠금·커서에 참여하지 않으므로 queue와 병행하지 않는다. 매핑 변경·닫힘과 이미
-실행 중인 원격 queue는 원자적으로 취소할 수 없어 한 건의 지연 전달 가능성이 남는다.
+실행 중인 원격 queue는 원자적으로 취소할 수 없어 한 건의 지연 전달 가능성이 남는다. listener 재검사 이후 시작된 요청 역시 철회로 취소할 수 없다.
+wait 반환 직전 프로세스가 죽으면 `waited` 기록만 남을 수 있어 정확히 한 번의 모델 수신까지
+보장하지 않는다. 메시지별 기록은 inbox와 함께 누적되며 열린 장기 스레드의 용량 관리가 필요하다.
 
 이번 구현 검증은 subprocess/Slack/spawn mock으로만 수행했다. 실제 queue, 브리지 서버,
 지킴이, Slack API는 실행하지 않았다. 기존 managed daemon 조건의 N=1은 위 실측 범위로
@@ -170,7 +179,7 @@ queue 사이의 crash/timeout에는 exactly-once를 보장할 수 없다. 중복
   자동 경로에서는 매핑·실패 상태와 wait 대기 표식을 별도로 확인한다. 실제 응답은
   `session_reply_ts`로 계속 확인한다.
 - 지킴이와 wait는 서로 다른 폴링 경로다. 실 Slack에서 멘션/명령 처리와 중복 메시지,
-  커서 및 경고 상호작용은 추가 실환경 검증이 필요하다. 전달 잠금과 커서는 위와 같이 공유한다.
+  커서 및 경고 상호작용은 추가 실환경 검증이 필요하다. inbox와 메시지별 전달 기록은 위와 같이 공유한다.
 - 공유 daemon 수명, macOS 절전, 실제 Slack 권한/연결, 동시 브리지 운영은 미검증이다.
 
 ## 공존과 검증
@@ -187,6 +196,7 @@ queue 사이의 crash/timeout에는 exactly-once를 보장할 수 없다. 중복
 자동 깨움 구현 후: pytest 67 passed, 52 subtests passed. UUID 저장·실행 인자·데이터 포장,
 영속 중복 방지/순서, 재시도/경고/timeout, flag off/UUID·실행파일 부재, wait 경쟁과
 필터, keeper intake→queue 및 spawn 인자·건강 경고를 mock으로 검증했다.
+검수 보완 후: pytest 82 passed, 50 subtests passed. 홈 경로 대신 레포 내부 임시 fixture를 사용했다.
 명령: `UV_CACHE_DIR=$PWD/.cache/uv TMPDIR=$PWD/tests uv run --offline --with pytest pytest -q`.
 테스트는 Slack 호출과 지킴이 기동을 mock하고 임시 상태를 레포 안에 둔다.
 `docs/PARITY.md`의 Claude 언급은 역사적 비교 근거로 의도적으로 보존한다.
