@@ -33,7 +33,7 @@ THREADS_DIR = Path(
     os.environ.get("CODEX_SLACK_BRIDGE_THREADS_DIR")
     or os.path.expanduser("~/.codex-slack-bridge/threads")
 )
-KEEPER_PROTOCOL = "inbox-ledger-v3"
+KEEPER_PROTOCOL = "inbox-gated-v4"
 SIDECAR_SUFFIXES = (".inbox.jsonl", ".lock", ".keeper.log", ".delivery.lock")
 
 

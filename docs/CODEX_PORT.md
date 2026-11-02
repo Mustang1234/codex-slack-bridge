@@ -130,9 +130,26 @@ open/attach/switch의 명시 `codex_thread_id`와 환경 UUID가 모두 있으�
 반환한다. 늦게 적재된 이전 ts, 재시작 claim, wait/queue 경쟁, 비동기 작업 중 close/bind,
 listener 철회, UUID 불일치, 실제 argv와 상태 전이도 mock 회귀 테스트로 검증한다.
 
+### 2차 검수: close·철회·worker 상한
+
+close는 Slack 상태 변경 전에 전달 잠금을 확보한다. 잠금이 바쁘면 아무 변경 없이 false를
+반환하고, keeper는 마감/부모 종료/폰 닫기에서 다음 주기에 다시 시도한다. switch는 기존 및
+확인된 목적지 스레드 잠금을 모두 확보한 후 변경하며, 경합 시 사용자에게 재시도를 안내한다.
+중첩 close/bind는 명시적으로 확보한 transaction 잠금만 재사용한다.
+
+스레드·채널 listener 변경은 공통 `_listeners` 파일잠금을 사용한다. queue도 이 잠금을
+현재 필터 확인부터 claim/프로세스 시작까지 보유하므로 철회와 launch 순서가 정해진다.
+잠금 점유 중 listener 명령은 변경하지 않고 재전송 안내를 보낸다. 이미 시작한 queue는 취소하지 않는다.
+
+`.wake-locks/`의 4개 flock 슬롯으로 동일 상태 디렉터리를 공유하는 keeper들의 queue worker를
+합쳐 최대 4개로 제한한다. 슬롯이 없으면 claim하지 않고 다음 tick으로 미룬다. 슬롯은 worker
+종료 시 해제한다. 프로세스 종료 후 이미 시작한 자식 queue의 생존까지 이 상한으로 통제하지는 못한다.
+close/switch가 Slack을 호출하는 동안에는 해당 전달 잠금이 유지되며, 상태 파일 내부 잠금과
+네트워크 호출 전체에 0.25초 실행 제한이 생긴 것은 아니다.
+
 ### 운영 한계와 복구
 
-지킴이 프로토콜을 `inbox-ledger-v3`로 올렸다. 실행 중인 옛 `inbox-v1`/`inbox-queue-v2` 지킴이를 새
+지킴이 프로토콜을 `inbox-gated-v4`로 올렸다. 실행 중인 옛 `inbox-v1`/`inbox-queue-v2`/`inbox-ledger-v3` 지킴이를 새
 어댑터 지원 프로세스로 오인하지 않고 `STALE_KEEPER`로 알린다. 배포 시 운영자가 옛
 지킴이를 정리한 뒤 재attach해야 한다. 이 변경은 프로세스를 자동 종료하지 않는다.
 

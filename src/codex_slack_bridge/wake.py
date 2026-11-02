@@ -6,7 +6,7 @@ retracted, but no launch can pass a completed local close.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from decimal import Decimal, InvalidOperation
 import json
 import os
@@ -27,6 +27,8 @@ RECOVERY_COOLDOWN = 60
 GATE_TIMEOUT = 0.25
 _workers: dict[tuple[str, str], threading.Thread] = {}
 _workers_lock = threading.Lock()
+_transactions = threading.local()
+MAX_WORKERS = 4
 
 
 class DeliveryBusy(RuntimeError):
@@ -70,12 +72,21 @@ def ts(value) -> Decimal:
 @contextmanager
 def delivery_lock(thread: str, *, blocking: bool = False):
     """Cross-process flock; blocking callers have a bounded acquisition deadline."""
+    key = (str(threads.THREADS_DIR), thread)
+    if key in getattr(_transactions, 'held', set()):
+        yield True
+        return
     if threads.fcntl is None:
         yield False
         return
     threads.THREADS_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        fd = os.open(threads._sidecar_path(thread, '.delivery.lock'), os.O_RDWR | os.O_CREAT, 0o600)
+        path = threads._sidecar_path(thread, '.delivery.lock')
+        if thread == '_listeners' or thread.startswith('_wake-slot-'):
+            directory = threads.THREADS_DIR / '.wake-locks'
+            directory.mkdir(exist_ok=True)
+            path = directory / (thread + '.lock')
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     except OSError:
         yield False
         return
@@ -98,6 +109,23 @@ def delivery_lock(thread: str, *, blocking: bool = False):
         if locked:
             threads.fcntl.flock(fd, threads.fcntl.LOCK_UN)
         os.close(fd)
+
+
+@contextmanager
+def transaction(thread_ids):
+    """Reserve all gates before effects; nested calls reuse only explicit transactions."""
+    previous = getattr(_transactions, 'held', set())
+    with ExitStack() as stack:
+        held = set(previous)
+        for thread in sorted(set(thread_ids)):
+            locked = stack.enter_context(delivery_lock(thread, blocking=True))
+            _require(locked)
+            held.add((str(threads.THREADS_DIR), thread))
+        _transactions.held = held
+        try:
+            yield
+        finally:
+            _transactions.held = previous
 
 
 def _require(locked: bool) -> None:
@@ -231,7 +259,13 @@ def schedule(thread: str, conf: cfg.Config, bot_user_id: str) -> None:
             return
         def work():
             try:
-                tick(thread, conf, bot_user_id)
+                # Shared file slots cap queue workers across keeper processes.
+                with ExitStack() as slots:
+                    for index in range(MAX_WORKERS):
+                        if slots.enter_context(delivery_lock(f'_wake-slot-{index}')):
+                            tick(thread, conf, bot_user_id)
+                            break
+                    # No slot: leave inbox untouched for the next keeper tick.
             except Exception:
                 # Never log message contents, tokens or arbitrary CLI output.
                 threads.patch(thread, wake_failed=True, wake_error='깨움 worker 오류; claim 상태 확인 필요')
@@ -250,8 +284,8 @@ def tick(thread: str, conf: cfg.Config | None = None, bot_user_id: str = '') -> 
     conf = conf or cfg.load()
     if conf is None:
         return 'disabled'
-    with delivery_lock(thread) as locked:
-        if not locked:
+    with delivery_lock('_listeners') as policy, delivery_lock(thread) as locked:
+        if not policy or not locked:
             return 'waiting'
         state = threads.load(thread) or {}
         if state.get('closed') or not state.get('wake_enabled') or not conf.wake_enabled:

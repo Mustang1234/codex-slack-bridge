@@ -441,6 +441,17 @@ def close_thread(
     token: str, channel: str, thread_ts: str, label: str, reason: str,
     resumable: bool = False, only_if_notified: bool = False,
 ) -> bool:
+    try:
+        return _close_thread(token, channel, thread_ts, label, reason,
+                             resumable, only_if_notified)
+    except wake.DeliveryBusy:
+        return False  # No side effect: the reservation precedes all close work.
+
+
+def _close_thread(
+    token: str, channel: str, thread_ts: str, label: str, reason: str,
+    resumable: bool = False, only_if_notified: bool = False,
+) -> bool:
     """스레드를 닫는다 — 지우지 않고 표시만 남긴다. 돌려주는 값은 통보가 닿았는지다.
 
     머리글에 취소선을 긋는 이유: 답글로만 "닫혔다" 고 적으면 스레드를 펼쳐야
@@ -454,43 +465,44 @@ def close_thread(
     각 단계의 성공을 저장하므로 재시도는 아직 성공하지 않은 단계만 수행한다.
     부르는 쪽이 다음 주기에 다시 시도할 수 있을 때(지킴이의 마감 처리) 쓴다.
     """
-    stamp = time.strftime("%H:%M")
-    state = threads.load(thread_ts) or {}
-    header_done = state.get("header_editable") is False or bool(state.get("close_header_updated"))
-    notice_done = bool(state.get("close_notice_posted"))
-    if not header_done:
-        try:
-            slack.chat_update(
-                token, channel, thread_ts,
-                f"~*{strikeable(label)}* — 종료됨 ({stamp})~\n_{reason}_",
-            )
-        except slack.SlackError:
-            pass
-        else:
-            threads.patch(thread_ts, close_header_updated=True)
-            header_done = True
-    if not notice_done:
-        try:
-            slack.post_message(
-                token, channel,
-                f"{CLOSE_MARK} — {reason} ({stamp})\n이 스레드에 답글을 달아도 이제 읽지 않습니다.",
-                thread_ts=thread_ts,
-            )
-        except slack.SlackError:
-            pass
-        else:
-            # 각 성공을 즉시 남겨 다른 단계가 실패해도 다음 주기에 반복하지 않는다.
-            threads.patch(thread_ts, close_notice_posted=True)
-            notice_done = True
-    notified = header_done and notice_done
-    if only_if_notified and not notified:
-        return False
-    slack.set_session_status(token, channel, thread_ts, "closed")
-    wake.close_delivery(
-        thread_ts, closed=True, closed_at=time.time(), reason=reason, resumable=resumable,
-        listeners=[],
-    )
-    return notified
+    with wake.transaction([thread_ts]):
+        stamp = time.strftime("%H:%M")
+        state = threads.load(thread_ts) or {}
+        header_done = state.get("header_editable") is False or bool(state.get("close_header_updated"))
+        notice_done = bool(state.get("close_notice_posted"))
+        if not header_done:
+            try:
+                slack.chat_update(
+                    token, channel, thread_ts,
+                    f"~*{strikeable(label)}* — 종료됨 ({stamp})~\n_{reason}_",
+                )
+            except slack.SlackError:
+                pass
+            else:
+                threads.patch(thread_ts, close_header_updated=True)
+                header_done = True
+        if not notice_done:
+            try:
+                slack.post_message(
+                    token, channel,
+                    f"{CLOSE_MARK} — {reason} ({stamp})\n이 스레드에 답글을 달아도 이제 읽지 않습니다.",
+                    thread_ts=thread_ts,
+                )
+            except slack.SlackError:
+                pass
+            else:
+                # 각 성공을 즉시 남겨 다른 단계가 실패해도 다음 주기에 반복하지 않는다.
+                threads.patch(thread_ts, close_notice_posted=True)
+                notice_done = True
+        notified = header_done and notice_done
+        if only_if_notified and not notified:
+            return False
+        slack.set_session_status(token, channel, thread_ts, "closed")
+        wake.close_delivery(
+            thread_ts, closed=True, closed_at=time.time(), reason=reason, resumable=resumable,
+            listeners=[],
+        )
+        return notified
 
 
 def close_chat(
@@ -505,6 +517,8 @@ def close_chat(
         token, chat.channel, chat.thread_ts, chat.label or "Codex 세션", reason,
         resumable=resumable,
     )
+    if not (threads.load(chat.thread_ts) or {}).get("closed"):
+        raise wake.DeliveryBusy("수신 처리 중입니다. 닫기를 다시 시도하세요.")
     forget(chat.thread_ts)
 
 

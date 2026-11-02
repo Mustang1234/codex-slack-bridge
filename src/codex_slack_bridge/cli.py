@@ -347,28 +347,14 @@ def _keep_awake() -> "subprocess.Popen | None":
         return None
 
 
-def _apply_command(
-    token, channel, thread, label, kind, value, state, actor_id="", owner_id="",
-    scope="thread",
-) -> bool:
-    """폰에서 온 지킴이 명령을 처리한다. 닫혔으면 True."""
-    now = time.time()
-    if not channel.startswith("D") and (not owner_id or actor_id != owner_id):
-        # 채널에서는 listener 도 수신 필터를 통과하므로, 지킴이 명령(핑·연장·
-        # 마감·닫기·듣기)은 여기서 주인만 남긴다. 예전에는 필터가 주인만 통과시켜
-        # 이 게이트가 필요 없었다. DM 은 상대가 한 사람이라 거를 것이 없다.
-        try:
-            slack.post_message(token, channel, "주인만 할 수 있습니다.", thread_ts=thread)
-        except slack.SlackError:
-            pass
-        return False
-
+def _listener_command(token, channel, thread, label, kind, value, state,
+                      actor_id, owner_id, scope):
     if kind in ("listen", "unlisten", "listeners"):
         if channel.startswith("D"):
             reply = "DM 에서는 쓸 수 없습니다."
         else:
             channel_listeners = cfg.channel_listeners(channel)
-            thread_listeners = list(state.get("listeners") or [])
+            thread_listeners = list((threads.load(thread) or state).get("listeners") or [])
             if kind == "listeners":
                 people = ", ".join(f"<@{user_id}>" for user_id in thread_listeners)
                 local = f"<@{owner_id}>(주인), {people}" if people else "주인만"
@@ -432,6 +418,35 @@ def _apply_command(
             pass
         return False
 
+
+def _apply_command(
+    token, channel, thread, label, kind, value, state, actor_id="", owner_id="",
+    scope="thread",
+) -> bool:
+    """폰에서 온 지킴이 명령을 처리한다. 닫혔으면 True."""
+    now = time.time()
+    if not channel.startswith("D") and (not owner_id or actor_id != owner_id):
+        # 채널에서는 listener 도 수신 필터를 통과하므로, 지킴이 명령(핑·연장·
+        # 마감·닫기·듣기)은 여기서 주인만 남긴다. 예전에는 필터가 주인만 통과시켜
+        # 이 게이트가 필요 없었다. DM 은 상대가 한 사람이라 거를 것이 없다.
+        try:
+            slack.post_message(token, channel, "주인만 할 수 있습니다.", thread_ts=thread)
+        except slack.SlackError:
+            pass
+        return False
+
+    if kind in ("listen", "unlisten", "listeners"):
+        try:
+            with wake.transaction(['_listeners']):
+                return _listener_command(token, channel, thread, label, kind, value,
+                                         state, actor_id, owner_id, scope)
+        except wake.DeliveryBusy:
+            try:
+                slack.post_message(token, channel, '수신 처리 중입니다. listener 명령을 다시 보내주세요.', thread_ts=thread)
+            except slack.SlackError:
+                pass
+            return False
+
     if kind == "ping":
         # 감시자가 살아있는지 사용자가 직접 확인하는 길.
         #
@@ -453,6 +468,8 @@ def _apply_command(
 
     if kind == "close":
         chat.close_thread(token, channel, thread, label, "폰에서 닫음")
+        if not (threads.load(thread) or {}).get("closed"):
+            raise wake.DeliveryBusy("close deferred")
         return True
 
     if kind == "until":
@@ -629,202 +646,210 @@ def cmd_keeper(argv: list[str]) -> None:
         unreachable_logged = 0.0
         close_deferred = False      # 마감 통보를 못 전해 닫기를 미루는 중인지
         while True:
-            if parent and not _pid_alive(int(parent)):
-                _log("PARENT_GONE")
-                current = threads.load(thread) or state
-                if current.get("closed"):
-                    threads.append_inbox_event(thread, "THREAD_CLOSED")
-                    return
-                last_seen = float(current.get("last_seen_ts") or 0)
-                unread = threads.read_inbox(thread, last_seen)
-                reason = "Codex 세션 종료"
-                if unread:
-                    reason += f"\n읽지 못한 메시지: {len(unread)}건"
-                # 세션이 죽은 것은 대화가 끝난 것이 아니다. 재시작한 세션이 attach 로
-                # 돌아올 수 있게 재개 가능으로 닫는다.
-                if not chat.close_thread(
-                    conf.bot_token, channel, thread, label, reason, resumable=True,
-                ):
-                    _log("PARENT_CLOSE_FAILED")
-                threads.append_inbox_event(thread, "THREAD_CLOSED")
-                return
-
-            state = threads.load(thread) or state
-            if state.get("closed"):
-                _log("CLOSED")
-                threads.append_inbox_event(thread, "THREAD_CLOSED")
-                return
-            # channels.json은 작고 listener 변경은 드물다. 캐시 무효화 복잡성을
-            # 들이지 않고 매 폴링에 읽어 모든 열린 스레드에 즉시 반영한다.
-            listeners = _effective_listeners(channel, state)
-            if require_mention and not owner_id and not state.get("owner_missing_warned"):
-                if _safe_patch(thread, owner_missing_warned=True):
-                    try:
-                        slack.post_message(
-                            conf.bot_token, channel,
-                            "owner 가 설정돼 있지 않아 이 채널에서는 지시를 받지 않습니다. "
-                            "`codex-slack-bridge init` 을 다시 돌려 주세요",
-                            thread_ts=thread,
-                        )
-                    except slack.SlackError:
-                        _safe_patch(thread, owner_missing_warned=False)
-            deadline = float(state.get("deadline") or 0)
-            remaining = deadline - time.time()
-
-            if remaining <= 0:
-                # 통보가 안 닿으면 바로 닫지 않는다. 밤새 Wi-Fi 가 16분마다 잠깐씩만
-                # 열리던 날 예고도 🔒 도 전부 버려져 폰에서는 스레드가 말없이 죽은
-                # 것으로 보였다(2026-09-17). 유예 안에서는 다음 주기에 다시 시도하고,
-                # 유예가 끝나면 통보 없이라도 닫는다 — 영원히 붙잡지는 않는다.
-                final = -remaining >= chat.CLOSE_NOTICE_GRACE
-                closed = chat.close_thread(
-                    conf.bot_token, channel, thread, label, "마감 시각 도달",
-                    resumable=True, only_if_notified=not final,
-                )
-                if closed or final:
-                    _log("DEADLINE_CLOSED" if closed else "DEADLINE_CLOSED\t통보 못 함")
-                    threads.append_inbox_event(thread, "THREAD_CLOSED")
-                    return
-                if not close_deferred:
-                    close_deferred = True
-                    _log("DEADLINE_NOTICE_PENDING\tSlack 에 닿지 않아 닫기를 미룬다")
-                time.sleep(interval)
-                continue
-
-            if not state.get("warned") and remaining <= chat.WARN_LEAD:
-                try:
-                    slack.post_message(
-                        conf.bot_token, channel, chat.warn_text(remaining), thread_ts=thread
-                    )
-                    threads.patch(thread, warned=True)
-                except slack.SlackError:
-                    pass
-
             try:
-                msgs = slack.conversations_replies(conf.bot_token, channel, thread)
-            except slack.SlackError as e:
-                # 지킴이는 어지간해서는 죽지 않아야 한다. 죽으면 Esc 뒤에 폰이
-                # 완전한 침묵이 되고, 그때는 확인할 방법도 함께 사라진다.
-                #
-                # 대신 안 닿는다는 사실은 남긴다. 이 아래의 예고·⚠️·🔒 는 전부
-                # Slack 이 닿아야 나가는데, 조용히 넘기면 밤새 아무것도 안 나간
-                # 이유를 사후에 가릴 길이 없다.
-                now = time.time()
-                if not unreachable_since:
-                    unreachable_since = unreachable_logged = now
-                    _log(f"SLACK_UNREACHABLE\t{e}".replace("\n", " "))
-                elif now - unreachable_logged >= UNREACHABLE_LOG_EVERY:
-                    unreachable_logged = now
-                    _log(
-                        f"SLACK_UNREACHABLE\t{_span(now - unreachable_since)} 째\t{e}"
-                        .replace("\n", " ")
-                    )
-                time.sleep(interval)
-                continue
-            if unreachable_since:
-                _log(f"SLACK_BACK\t{_span(time.time() - unreachable_since)} 만에")
-                unreachable_since = 0.0
-
-            fresh = [
-                m for m in msgs
-                if float(m.get("ts", 0)) > seen
-                and chat.is_for_me(m, bot_user_id, owner_id, require_mention, listeners)
-            ]
-            fresh.sort(key=lambda m: float(m.get("ts", 0)))
-
-            for m in fresh:
-                message_ts = float(m.get("ts", 0))
-                cmd = chat.parse_command(chat.strip_mention(m.get("text", ""), bot_user_id))
-                if cmd:
-                    command_state = threads.load(thread) or state
-                    if _apply_command(
-                        conf.bot_token, channel, thread, label,
-                        cmd[0], cmd[1], command_state,
-                        str(m.get("user") or ""), owner_id, scope=cmd[2],
-                    ):
-                        _log("CLOSED_BY_USER")
+                if parent and not _pid_alive(int(parent)):
+                    _log("PARENT_GONE")
+                    current = threads.load(thread) or state
+                    if current.get("closed"):
                         threads.append_inbox_event(thread, "THREAD_CLOSED")
                         return
-                    seen = message_ts
-                    threads.patch(thread, keeper_seen_ts=seen)
+                    last_seen = float(current.get("last_seen_ts") or 0)
+                    unread = threads.read_inbox(thread, last_seen)
+                    reason = "Codex 세션 종료"
+                    if unread:
+                        reason += f"\n읽지 못한 메시지: {len(unread)}건"
+                    # 세션이 죽은 것은 대화가 끝난 것이 아니다. 재시작한 세션이 attach 로
+                    # 돌아올 수 있게 재개 가능으로 닫는다.
+                    if not chat.close_thread(
+                        conf.bot_token, channel, thread, label, reason, resumable=True,
+                    ):
+                        _log("PARENT_CLOSE_FAILED")
+                    if not (threads.load(thread) or {}).get("closed"):
+                        raise wake.DeliveryBusy("parent close deferred")
+                    threads.append_inbox_event(thread, "THREAD_CLOSED")
+                    return
+
+                state = threads.load(thread) or state
+                if state.get("closed"):
+                    _log("CLOSED")
+                    threads.append_inbox_event(thread, "THREAD_CLOSED")
+                    return
+                # channels.json은 작고 listener 변경은 드물다. 캐시 무효화 복잡성을
+                # 들이지 않고 매 폴링에 읽어 모든 열린 스레드에 즉시 반영한다.
+                listeners = _effective_listeners(channel, state)
+                if require_mention and not owner_id and not state.get("owner_missing_warned"):
+                    if _safe_patch(thread, owner_missing_warned=True):
+                        try:
+                            slack.post_message(
+                                conf.bot_token, channel,
+                                "owner 가 설정돼 있지 않아 이 채널에서는 지시를 받지 않습니다. "
+                                "`codex-slack-bridge init` 을 다시 돌려 주세요",
+                                thread_ts=thread,
+                            )
+                        except slack.SlackError:
+                            _safe_patch(thread, owner_missing_warned=False)
+                deadline = float(state.get("deadline") or 0)
+                remaining = deadline - time.time()
+
+                if remaining <= 0:
+                    # 통보가 안 닿으면 바로 닫지 않는다. 밤새 Wi-Fi 가 16분마다 잠깐씩만
+                    # 열리던 날 예고도 🔒 도 전부 버려져 폰에서는 스레드가 말없이 죽은
+                    # 것으로 보였다(2026-09-17). 유예 안에서는 다음 주기에 다시 시도하고,
+                    # 유예가 끝나면 통보 없이라도 닫는다 — 영원히 붙잡지는 않는다.
+                    final = -remaining >= chat.CLOSE_NOTICE_GRACE
+                    closed = chat.close_thread(
+                        conf.bot_token, channel, thread, label, "마감 시각 도달",
+                        resumable=True, only_if_notified=not final,
+                    )
+                    if (closed or final) and (threads.load(thread) or {}).get("closed"):
+                        _log("DEADLINE_CLOSED" if closed else "DEADLINE_CLOSED\t통보 못 함")
+                        threads.append_inbox_event(thread, "THREAD_CLOSED")
+                        return
+                    if not close_deferred:
+                        close_deferred = True
+                        _log("DEADLINE_NOTICE_PENDING\tSlack 에 닿지 않아 닫기를 미룬다")
+                    time.sleep(interval)
                     continue
 
-                summary = chat.describe(m).replace("\n", " ")[:120]
-                threads.append_inbox(thread, m, summary)
-                # append와 fsync가 끝난 뒤에만 Slack 커서를 민다. 이 순서가 뒤집히면
-                # 둘 사이의 크래시가 메시지를 영구히 건너뛰게 한다.
-                seen = message_ts
-                threads.patch(thread, keeper_seen_ts=seen)
-
-                # 예고를 본 뒤 온 일반 답글은 자리에 있다는 신호다. inbox 기록과
-                # 커서 전진을 먼저 끝내야 연장 도중 죽어도 메시지 자체는 남는다.
-                current = threads.load(thread) or state
-                if current.get("warned"):
-                    base = max(float(current.get("deadline") or time.time()), time.time())
-                    new_deadline = base + chat.AUTO_EXTEND_HOURS * 3600
-                    threads.patch(thread, deadline=new_deadline, warned=False)
+                if not state.get("warned") and remaining <= chat.WARN_LEAD:
                     try:
-                        slack.chat_update(
-                            conf.bot_token, channel, thread,
-                            chat.header_text(label, new_deadline),
+                        slack.post_message(
+                            conf.bot_token, channel, chat.warn_text(remaining), thread_ts=thread
                         )
+                        threads.patch(thread, warned=True)
                     except slack.SlackError:
                         pass
 
-                # 받았다는 표시는 "작업 중" 상태로 즉시 켠다. 세션이 답하면
-                # server.slack_notify가 active로 내린다. 30초까지 답이 없으면
-                # agent_view 앱에도 지킴이가 대체 답글을 남기고 표시를 내리며,
-                # 상태를 못 찍는 옛 앱은 기존의 짧은 수신확인을 남긴다.
-                if agent_session is None and m.get("user"):
-                    agent_session = slack.set_session_status(
-                        conf.bot_token, channel, thread, "active",
-                        initiator_user_id=str(m["user"]), title=label,
-                    )
-                if agent_session:
-                    slack.set_session_status(conf.bot_token, channel, thread, "processing")
-                # 상태 표시 지원 여부와 무관하게 30초 뒤 실제 세션 답을 확인한다.
-                # 지원 앱도 그때까지 답이 없으면 지킴이가 대신 답하고 표시를 내린다.
-                pending.append(message_ts)
-
-            # Inbox append/fsync precedes delivery. Also retry backlog after a restart.
-            wake.schedule(thread, conf, bot_user_id)
-
-            # 유예가 지난 것 중 아직 답이 안 붙은 것만 알린다.
-            still = []
-            expired_unanswered = []
-            replied = float((threads.load(thread) or {}).get("session_reply_ts") or 0)
-            for ts in pending:
-                if time.time() - ts < ACK_DELAY:
-                    still.append(ts)
-                    continue
-                if replied > ts:
-                    continue
-                expired_unanswered.append(ts)
-
-            if expired_unanswered:
-                note = (
-                    "_네, 봤습니다. 지금 하던 걸 마저 보고 있어요. 정리되는 대로 답드릴게요._"
-                    if agent_session else "_네, 봤습니다. 적어 뒀어요._"
-                )
                 try:
-                    slack.post_message(conf.bot_token, channel, note, thread_ts=thread)
-                except slack.SlackError:
-                    still.extend(expired_unanswered)  # 못 보냈으면 다음 주기에 다시 시도
-                else:
-                    # 이 글은 지킴이 발화라 session_reply_ts를 건드리지 않는다.
-                    # 5분 무응답 판정은 계속 살아 있고, 작업 중 표시는 여기서 내린다.
-                    if agent_session:
-                        slack.set_session_status(
-                            conf.bot_token, channel, thread, "active"
+                    msgs = slack.conversations_replies(conf.bot_token, channel, thread)
+                except slack.SlackError as e:
+                    # 지킴이는 어지간해서는 죽지 않아야 한다. 죽으면 Esc 뒤에 폰이
+                    # 완전한 침묵이 되고, 그때는 확인할 방법도 함께 사라진다.
+                    #
+                    # 대신 안 닿는다는 사실은 남긴다. 이 아래의 예고·⚠️·🔒 는 전부
+                    # Slack 이 닿아야 나가는데, 조용히 넘기면 밤새 아무것도 안 나간
+                    # 이유를 사후에 가릴 길이 없다.
+                    now = time.time()
+                    if not unreachable_since:
+                        unreachable_since = unreachable_logged = now
+                        _log(f"SLACK_UNREACHABLE\t{e}".replace("\n", " "))
+                    elif now - unreachable_logged >= UNREACHABLE_LOG_EVERY:
+                        unreachable_logged = now
+                        _log(
+                            f"SLACK_UNREACHABLE\t{_span(now - unreachable_since)} 째\t{e}"
+                            .replace("\n", " ")
                         )
-            pending = still
+                    time.sleep(interval)
+                    continue
+                if unreachable_since:
+                    _log(f"SLACK_BACK\t{_span(time.time() - unreachable_since)} 만에")
+                    unreachable_since = 0.0
 
-            _check_session_health(
-                conf.bot_token, channel, thread, msgs,
-                bot_user_id, owner_id, require_mention, listeners, health,
-            )
+                fresh = [
+                    m for m in msgs
+                    if float(m.get("ts", 0)) > seen
+                    and chat.is_for_me(m, bot_user_id, owner_id, require_mention, listeners)
+                ]
+                fresh.sort(key=lambda m: float(m.get("ts", 0)))
 
-            time.sleep(interval)
+                for m in fresh:
+                    message_ts = float(m.get("ts", 0))
+                    cmd = chat.parse_command(chat.strip_mention(m.get("text", ""), bot_user_id))
+                    if cmd:
+                        command_state = threads.load(thread) or state
+                        if _apply_command(
+                            conf.bot_token, channel, thread, label,
+                            cmd[0], cmd[1], command_state,
+                            str(m.get("user") or ""), owner_id, scope=cmd[2],
+                        ):
+                            _log("CLOSED_BY_USER")
+                            threads.append_inbox_event(thread, "THREAD_CLOSED")
+                            return
+                        seen = message_ts
+                        threads.patch(thread, keeper_seen_ts=seen)
+                        continue
+
+                    summary = chat.describe(m).replace("\n", " ")[:120]
+                    threads.append_inbox(thread, m, summary)
+                    # append와 fsync가 끝난 뒤에만 Slack 커서를 민다. 이 순서가 뒤집히면
+                    # 둘 사이의 크래시가 메시지를 영구히 건너뛰게 한다.
+                    seen = message_ts
+                    threads.patch(thread, keeper_seen_ts=seen)
+
+                    # 예고를 본 뒤 온 일반 답글은 자리에 있다는 신호다. inbox 기록과
+                    # 커서 전진을 먼저 끝내야 연장 도중 죽어도 메시지 자체는 남는다.
+                    current = threads.load(thread) or state
+                    if current.get("warned"):
+                        base = max(float(current.get("deadline") or time.time()), time.time())
+                        new_deadline = base + chat.AUTO_EXTEND_HOURS * 3600
+                        threads.patch(thread, deadline=new_deadline, warned=False)
+                        try:
+                            slack.chat_update(
+                                conf.bot_token, channel, thread,
+                                chat.header_text(label, new_deadline),
+                            )
+                        except slack.SlackError:
+                            pass
+
+                    # 받았다는 표시는 "작업 중" 상태로 즉시 켠다. 세션이 답하면
+                    # server.slack_notify가 active로 내린다. 30초까지 답이 없으면
+                    # agent_view 앱에도 지킴이가 대체 답글을 남기고 표시를 내리며,
+                    # 상태를 못 찍는 옛 앱은 기존의 짧은 수신확인을 남긴다.
+                    if agent_session is None and m.get("user"):
+                        agent_session = slack.set_session_status(
+                            conf.bot_token, channel, thread, "active",
+                            initiator_user_id=str(m["user"]), title=label,
+                        )
+                    if agent_session:
+                        slack.set_session_status(conf.bot_token, channel, thread, "processing")
+                    # 상태 표시 지원 여부와 무관하게 30초 뒤 실제 세션 답을 확인한다.
+                    # 지원 앱도 그때까지 답이 없으면 지킴이가 대신 답하고 표시를 내린다.
+                    pending.append(message_ts)
+
+                # Inbox append/fsync precedes delivery. Also retry backlog after a restart.
+                wake.schedule(thread, conf, bot_user_id)
+
+                # 유예가 지난 것 중 아직 답이 안 붙은 것만 알린다.
+                still = []
+                expired_unanswered = []
+                replied = float((threads.load(thread) or {}).get("session_reply_ts") or 0)
+                for ts in pending:
+                    if time.time() - ts < ACK_DELAY:
+                        still.append(ts)
+                        continue
+                    if replied > ts:
+                        continue
+                    expired_unanswered.append(ts)
+
+                if expired_unanswered:
+                    note = (
+                        "_네, 봤습니다. 지금 하던 걸 마저 보고 있어요. 정리되는 대로 답드릴게요._"
+                        if agent_session else "_네, 봤습니다. 적어 뒀어요._"
+                    )
+                    try:
+                        slack.post_message(conf.bot_token, channel, note, thread_ts=thread)
+                    except slack.SlackError:
+                        still.extend(expired_unanswered)  # 못 보냈으면 다음 주기에 다시 시도
+                    else:
+                        # 이 글은 지킴이 발화라 session_reply_ts를 건드리지 않는다.
+                        # 5분 무응답 판정은 계속 살아 있고, 작업 중 표시는 여기서 내린다.
+                        if agent_session:
+                            slack.set_session_status(
+                                conf.bot_token, channel, thread, "active"
+                            )
+                pending = still
+
+                _check_session_health(
+                    conf.bot_token, channel, thread, msgs,
+                    bot_user_id, owner_id, require_mention, listeners, health,
+                )
+
+                time.sleep(interval)
+            except wake.DeliveryBusy:
+                _log("DELIVERY_BUSY\t다음 주기에 재시도")
+                time.sleep(interval)
+                continue
+
     finally:
         if awake and awake.poll() is None:
             awake.terminate()

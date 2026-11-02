@@ -910,75 +910,79 @@ def slack_chat_switch(
             f"기존 스레드({where}, thread={old.thread_ts})는 그대로 열려 있습니다."
         )
 
-    # 2) 옛 스레드를 닫는다. kill 하지 않는다 — 지킴이는 상태의 closed 를 보고
-    #    스스로 빠지고, 그래야 죽은 pid 가 파일에 남아 사망 원인을 흐리지 않는다.
-    old_ts = ""
-    if old is None:
-        closed_note = "닫을 스레드가 없어 새로 여는 것만 했습니다."
-    else:
-        old_ts = old.thread_ts
-        # 재개 가능으로 닫는다. 3단계가 실패하면 여기로 되돌아와야 하고, 사용자가
-        # 나중에 이 스레드로 다시 옮겨 오라고 할 수도 있다.
-        chatmod.close_chat(
-            conf.bot_token, reason="대화를 다른 곳으로 옮겼습니다", resumable=True
-        )
-        _forget_owned(old_ts)
-        closed_note = f"옛 스레드(thread={old_ts})를 닫았습니다."
-
-    # 3) URL이 가리킨 기존 스레드에 붙거나, 스레드가 없으면 새로 연다.
     try:
-        if target_parent:
-            c = chatmod.attach(
-                conf.bot_token, target_parent, destination, hours, label
-            )
-        else:
-            c = chatmod.open_chat(conf.bot_token, destination, hours, label)
-    except (chatmod.NoChat, slack.SlackError) as e:
-        destination_kind = "기존 스레드에 붙지" if target_parent else "새 스레드를 열지"
-        # 선검증을 통과해도 네트워크는 그 사이에 죽을 수 있다. 묶인 곳 없는 세션을
-        # 남기지 않도록 방금 닫은 스레드로 되돌린다.
-        if old is not None:
-            try:
-                back = chatmod.attach(conf.bot_token, old_ts, old.channel, None, old.label)
-            except (chatmod.NoChat, slack.SlackError):
-                back = None
-            if back is not None:
-                wake.bind(back.thread_ts, codex_id, conf.wake_enabled)
-                keeper_status = _start_keeper(back.thread_ts)
-                return (
-                    f"옮기지 못해 원래 스레드로 되돌렸습니다 — {destination_kind} 못했습니다.\n{e}\n"
-                    f"thread={back.thread_ts}\n"
-                    f"{_startup_lines(back, keeper_status)}"
+        with wake.transaction([ts for ts in (old.thread_ts if old else '', target_parent) if ts]):
+            # 2) 옛 스레드를 닫는다. kill 하지 않는다 — 지킴이는 상태의 closed 를 보고
+            #    스스로 빠지고, 그래야 죽은 pid 가 파일에 남아 사망 원인을 흐리지 않는다.
+            old_ts = ""
+            if old is None:
+                closed_note = "닫을 스레드가 없어 새로 여는 것만 했습니다."
+            else:
+                old_ts = old.thread_ts
+                # 재개 가능으로 닫는다. 3단계가 실패하면 여기로 되돌아와야 하고, 사용자가
+                # 나중에 이 스레드로 다시 옮겨 오라고 할 수도 있다.
+                chatmod.close_chat(
+                    conf.bot_token, reason="대화를 다른 곳으로 옮겼습니다", resumable=True
                 )
-        return (
-            f"{closed_note}\n"
-            f"그런데 {destination_kind} 못했습니다.\n{e}\n"
-            f"남은 스레드: {', '.join(chatmod._chats) or '없음'}. 새 대화면 slack_chat_open, "
-            "기존 스레드면 slack_chat_attach로 다시 묶으세요. 옛 스레드는 이미 닫혔습니다."
-        )
+                _forget_owned(old_ts)
+                closed_note = f"옛 스레드(thread={old_ts})를 닫았습니다."
 
-    wake.bind(c.thread_ts, codex_id, conf.wake_enabled)
-    where = "DM" if c.channel.startswith("D") else c.channel
-    keeper_status = _start_keeper(c.thread_ts)
-    moved_kind = "기존 스레드에 붙었습니다" if target_parent else "새 스레드를 열었습니다"
-    lines = [
-        f"옮겼습니다 → {where}, {moved_kind}. "
-        f"마감까지 {chatmod.fmt_remaining(c.remaining)} 남았습니다.",
-        closed_note,
-    ]
-    if old_ts:
-        lines.append(
-            f"옛 스레드 {old_ts}는 닫혔습니다. 이후 답장을 기다릴 때는 "
-            f"slack_wait_reply(thread_ts='{c.thread_ts}')를 호출하세요."
-        )
-    if not c.channel.startswith("D"):
-        lines.append(
-            "채널이므로 이제 소유자·해당 스레드 listeners·채널 전체 listeners 의 @멘션만 들어옵니다. 멘션 없는 말은 "
-            "조용히 버려지니 사용자에게 알려주세요."
-        )
-    lines.append(f"thread={c.thread_ts}")
-    lines.append(_startup_lines(c, keeper_status))
-    return "\n".join(lines)
+            # 3) URL이 가리킨 기존 스레드에 붙거나, 스레드가 없으면 새로 연다.
+            try:
+                if target_parent:
+                    c = chatmod.attach(
+                        conf.bot_token, target_parent, destination, hours, label
+                    )
+                else:
+                    c = chatmod.open_chat(conf.bot_token, destination, hours, label)
+            except (chatmod.NoChat, slack.SlackError) as e:
+                destination_kind = "기존 스레드에 붙지" if target_parent else "새 스레드를 열지"
+                # 선검증을 통과해도 네트워크는 그 사이에 죽을 수 있다. 묶인 곳 없는 세션을
+                # 남기지 않도록 방금 닫은 스레드로 되돌린다.
+                if old is not None:
+                    try:
+                        back = chatmod.attach(conf.bot_token, old_ts, old.channel, None, old.label)
+                    except (chatmod.NoChat, slack.SlackError):
+                        back = None
+                    if back is not None:
+                        wake.bind(back.thread_ts, codex_id, conf.wake_enabled)
+                        keeper_status = _start_keeper(back.thread_ts)
+                        return (
+                            f"옮기지 못해 원래 스레드로 되돌렸습니다 — {destination_kind} 못했습니다.\n{e}\n"
+                            f"thread={back.thread_ts}\n"
+                            f"{_startup_lines(back, keeper_status)}"
+                        )
+                return (
+                    f"{closed_note}\n"
+                    f"그런데 {destination_kind} 못했습니다.\n{e}\n"
+                    f"남은 스레드: {', '.join(chatmod._chats) or '없음'}. 새 대화면 slack_chat_open, "
+                    "기존 스레드면 slack_chat_attach로 다시 묶으세요. 옛 스레드는 이미 닫혔습니다."
+                )
+
+            wake.bind(c.thread_ts, codex_id, conf.wake_enabled)
+            where = "DM" if c.channel.startswith("D") else c.channel
+            keeper_status = _start_keeper(c.thread_ts)
+            moved_kind = "기존 스레드에 붙었습니다" if target_parent else "새 스레드를 열었습니다"
+            lines = [
+                f"옮겼습니다 → {where}, {moved_kind}. "
+                f"마감까지 {chatmod.fmt_remaining(c.remaining)} 남았습니다.",
+                closed_note,
+            ]
+            if old_ts:
+                lines.append(
+                    f"옛 스레드 {old_ts}는 닫혔습니다. 이후 답장을 기다릴 때는 "
+                    f"slack_wait_reply(thread_ts='{c.thread_ts}')를 호출하세요."
+                )
+            if not c.channel.startswith("D"):
+                lines.append(
+                    "채널이므로 이제 소유자·해당 스레드 listeners·채널 전체 listeners 의 @멘션만 들어옵니다. 멘션 없는 말은 "
+                    "조용히 버려지니 사용자에게 알려주세요."
+                )
+            lines.append(f"thread={c.thread_ts}")
+            lines.append(_startup_lines(c, keeper_status))
+            return "\n".join(lines)
+    except wake.DeliveryBusy:
+        return "수신 상태 변경 중입니다. 잠시 후 switch를 다시 시도하세요."
 
 
 @server.tool(
@@ -1174,7 +1178,10 @@ def slack_chat_close(thread_ts: str | None = None) -> str:
         c = chatmod.current(thread_ts)
     except chatmod.NoChat as e:
         return str(e) if thread_ts is not None else "쥔 스레드 없음"
-    chatmod.close_chat(conf.bot_token, thread_ts=c.thread_ts)
+    try:
+        chatmod.close_chat(conf.bot_token, thread_ts=c.thread_ts)
+    except wake.DeliveryBusy as e:
+        return str(e)
     _forget_owned(c.thread_ts)
     remaining = (
         "남은 스레드: " + ", ".join(chatmod._chats)
