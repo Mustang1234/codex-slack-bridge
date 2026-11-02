@@ -1,12 +1,26 @@
+import re
 import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from codex_slack_bridge import config, server, threads
+from codex_slack_bridge import cli, config, server, threads
 
 
 class CodexPortTests(unittest.TestCase):
+    def test_packaged_manifest_has_exact_live_app_bot_scopes(self):
+        manifest = cli.read_manifest()
+        block = manifest.split('oauth_config:\n', 1)[1].split('\nsettings:', 1)[0]
+        self.assertRegex(block, r'^  scopes:\n    bot:\n')
+        scopes = re.findall(r'^      - ([a-z_]+:[a-z_.]+)$', block, re.MULTILINE)
+        self.assertEqual(len(scopes), 14)
+        self.assertEqual(set(scopes), {
+            'chat:write', 'im:write', 'channels:history', 'groups:history',
+            'im:history', 'channels:read', 'groups:read', 'app_mentions:read',
+            'chat:write.customize', 'calls:write', 'calls:read',
+            'assistant:write', 'users:read', 'files:read',
+        })
+
     def test_session_pid_skips_bridge_and_wrappers(self):
         output = ('90 80 python -m codex_slack_bridge\n'
                   '80 70 uvx codex-slack-bridge\n'
