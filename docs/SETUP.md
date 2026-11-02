@@ -41,7 +41,7 @@ uvx --from git+https://github.com/Mustang1234/codex-slack-bridge codex-slack-bri
 
 목적지는 공개 채널·비공개 채널·봇과의 DM 중 하나다. 채널을 쓸 때는:
 
-1. 받을 공개 또는 비공개 채널을 고르거나 만든다 (예: `#claude-알림`)
+1. 받을 공개 또는 비공개 채널을 고르거나 만든다 (예: `#codex-알림`)
 2. 그 채널에서 `/invite @Codex Bridge` 로 봇을 초대한다
 3. 채널 이름 우클릭 → `링크 복사` → URL 끝의 `C` 로 시작하는 문자열이 채널 ID 다
 
@@ -82,12 +82,24 @@ chmod 600 ~/.codex-slack-bridge/config.json
 ## 4. Codex CLI 에 붙이기
 
 ```bash
-claude mcp add codex-slack-bridge -s user -- \
+codex mcp add codex-slack-bridge -- \
   uvx --from git+https://github.com/Mustang1234/codex-slack-bridge codex-slack-bridge
 ```
 
-`-s user` 는 모든 프로젝트에서 쓰겠다는 뜻이다. 알림은 어느 프로젝트에서 일하든
-받아야 하므로 이 범위가 맞다.
+설정은 `~/.codex/config.toml`의 `[mcp_servers.codex-slack-bridge]`에 저장된다.
+직접 작성할 때는 다음과 같다:
+
+```toml
+[mcp_servers.codex-slack-bridge]
+command = "uvx"
+args = ["--from", "git+https://github.com/Mustang1234/codex-slack-bridge", "codex-slack-bridge"]
+tool_timeout_sec = 60
+```
+
+대기는 `slack_wait_reply(timeout_seconds=30)`처럼 MCP 호출 제한보다 짧게 한다.
+승인·샌드박스 정책은 Codex 설정을 따르며 이 브리지는 권한을 자동 변경하지 않는다.
+위 원격 설치는 포팅 커밋이 게시된 뒤 사용한다. 현재 로컬 검토에는 `command`를
+이 체크아웃의 `.venv/bin/codex-slack-bridge` 절대 경로로 지정하고 `args = []`로 둔다.
 
 `--from` 을 빼면 안 된다. 이 패키지는 PyPI 에 없어서 uvx 가 가져올 곳을 모르고,
 `No solution found when resolving tool dependencies` 로 떨어진다.

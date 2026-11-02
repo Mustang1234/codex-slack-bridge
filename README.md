@@ -1,9 +1,10 @@
 # codex-slack-bridge
 
 Codex CLI 세션과 Slack 을 잇는 MCP 서버. 자리를 비운 사이 세션이 먼저 알림을
-보내고, 폰에서 이어서 확인한다.
+보내고, 폰에서 이어서 확인한다. **자동 세션 깨움은 아직 연결되지 않았다.**
+수신 방식 결정은 [CODEX_PORT.md](docs/CODEX_PORT.md)를 참고한다.
 
-특정 프로젝트에 종속되지 않는다. `claude mcp add` 한 줄이면 어느 Codex CLI 에서든
+특정 프로젝트에 종속되지 않는다. `codex mcp add` 한 줄이면 어느 Codex CLI 에서든
 붙는다.
 
 ## 왜 서버가 필요 없나
@@ -25,19 +26,31 @@ Socket Mode 나 Events API 를 쓰면 토큰이 둘로 늘고 설치 단계가 �
 uvx --from git+https://github.com/Mustang1234/codex-slack-bridge codex-slack-bridge init
 
 # 3) Codex CLI 에 붙이기
-claude mcp add codex-slack-bridge -s user -- \
+codex mcp add codex-slack-bridge -- \
   uvx --from git+https://github.com/Mustang1234/codex-slack-bridge codex-slack-bridge
 ```
 
-`-s user` 는 모든 프로젝트에서 쓰겠다는 뜻이다. 알림은 어느 프로젝트에서 일하든
-받아야 하므로 이 범위가 맞다.
+설정은 `~/.codex/config.toml`의 `[mcp_servers.codex-slack-bridge]`에 저장된다.
+직접 작성할 때는 다음과 같다:
+
+```toml
+[mcp_servers.codex-slack-bridge]
+command = "uvx"
+args = ["--from", "git+https://github.com/Mustang1234/codex-slack-bridge", "codex-slack-bridge"]
+tool_timeout_sec = 60
+```
+
+대기는 `slack_wait_reply(timeout_seconds=30)`처럼 MCP 호출 제한보다 짧게 한다.
+승인·샌드박스 정책은 Codex 설정을 따르며 이 브리지는 권한을 자동 변경하지 않는다.
+위 원격 설치는 포팅 커밋이 게시된 뒤 사용한다. 현재 로컬 검토에는 `command`를
+이 체크아웃의 `.venv/bin/codex-slack-bridge` 절대 경로로 지정하고 `args = []`로 둔다.
 
 자세한 절차는 [docs/SETUP.md](docs/SETUP.md) 에 있다.
 
 ## 언제 부를지 알려주기
 
 폰 답장의 경로, 짧은 답도 빠뜨리지 않는 규칙, 작업 중 표시의 의미를 포함한 전체 행동
-규칙은 서버가 MCP `instructions`로 배포한다. 각자의 `~/.claude/CLAUDE.md`에는 사용자가
+규칙은 서버가 MCP `instructions`로 배포한다. 각자의 `~/.codex/AGENTS.md`에는 사용자가
 원할 때 대화를 여는 법과 자리를 비운 동안 먼저 알릴 기준 정도만 적으면 된다.
 
 ```markdown
@@ -45,20 +58,20 @@ claude mcp add codex-slack-bridge -s user -- \
 알아야 할 일은 `slack_notify`로 먼저 보낸다.
 ```
 
-세부 규칙을 CLAUDE.md에 다시 복사하지 않는다. 서버 instructions와 두 벌로 관리하면
+세부 규칙을 AGENTS.md에 다시 복사하지 않는다. 서버 instructions와 두 벌로 관리하면
 폰 입력 경로와 상태 표시 규칙이 서로 다른 세대로 어긋난다.
 
 ## 명령
 
 | 명령 | 하는 일 |
 |---|---|
-| `codex-slack-bridge` | MCP 서버로 동작 (`claude mcp add` 가 이렇게 부른다) |
+| `codex-slack-bridge` | MCP 서버로 동작 (`codex mcp add` 가 이렇게 부른다) |
 | `init` | 설정 생성 + 연결 확인 + 테스트 메시지 발송 |
 | `manifest` | Slack 콘솔에 붙여넣을 앱 매니페스트 출력 (`--name` 으로 봇 이름 변경) |
 | `token-help` | Bot User OAuth Token 받는 법 출력 |
 | `targets` | 설정한 기본 목적지와 봇이 들어간 채널 확인 |
 | `keeper-start --thread <ts>` | 지킴이 수동 기동·진단 (보통은 MCP 서버가 자동 기동) |
-| `monitor --thread <ts>` | inbox 새 줄을 흘리고 60초마다 지킴이 점검 (Codex CLI Monitor 툴에 넣는 명령) |
+| `monitor --thread <ts>` | inbox 새 줄을 흘리고 60초마다 지킴이 점검 (자동 깨움 미연결) |
 | `watch --thread <ts>` | tmux·Codex 밖에서 쓰는 폴백 감시자 |
 | `doctor` | 현재 설정이 살아있는지 점검 |
 
@@ -100,7 +113,7 @@ codex-slack-bridge manifest --name "내 비서"
 ## 세션은 스레드를 여러 개 쥘 수 있다
 
 `slack_chat_attach`로 스레드를 추가하면 기존 스레드도 계속 듣는다. 붙은 스레드마다
-Monitor 하나를 유지하고, Monitor 줄의 `thread_ts`를 `slack_notify(thread_ts=...)`에
+메시지를 확인하고, 수신한 `thread_ts`를 `slack_notify(thread_ts=...)`에
 넘겨 **온 스레드로 답한다**. 생략하면 마지막에 붙은 기본 스레드로 가므로 둘 이상
 쥐었을 때는 반드시 지정한다. `slack_wait_reply(thread_ts=...)`도 스레드를 지정한다.
 
@@ -113,50 +126,18 @@ DM 스레드를 닫고 다른 곳으로 옮길 때는 `slack_chat_switch`를 쓴
 기본 스레드만 🔒 닫고 옮기며 나머지 스레드는 계속 듣는다.
 폰에는 모두 같은 봇 이름으로 보이므로 `label`에 프로젝트와 작업명을 적는다.
 
-## 지킴이와 Monitor
+## 지킴이와 수신
 
-Slack을 읽는 지킴이와 세션을 깨우는 Monitor가 역할을 나눈다.
+open/attach는 지킴이를 띄우고 MCP 서버가 30초마다 점검한다. `monitor`는 inbox를
+stdout으로 내보내고 60초마다 지킴이를 점검하는 CLI다. Codex를 자동으로 깨우지 않는다.
+`watch`는 답글 도착 시 종료하는 외부 소비자용 CLI로 유지한다.
 
-| | 소유 | 사용자가 Esc | 하는 일 |
-|---|---|---|---|
-| **지킴이** | MCP 서버가 기동, 프로세스는 떼어냄 | **안 죽음** | 마감·연장·`핑`·수신확인 |
-| **Monitor** (persistent) | Codex CLI | **안 죽음** | inbox 새 줄마다 세션 깨움 |
-
-`slack_chat_open`이나 `slack_chat_attach`가 지킴이를 직접 띄우고, MCP 서버 안의 감시
-스레드가 30초마다 죽었는지 확인해 되살린다. 두 툴은 inbox 새 줄을 흘리면서 60초마다
-지킴이를 점검하는 `codex-slack-bridge monitor --thread <ts>` 명령도 돌려준다. 그 명령을
-그대로 Codex CLI Monitor 툴(persistent)에 넣는다.
-
-Monitor는 stdout 한 줄마다 세션을 깨우며 이벤트마다 끝나지 않는다. 서버의 30초 감시가
-첫 번째 복구 층이고, Monitor의 60초 점검은 서버까지 죽었을 때 지킴이를 되살리는 두 번째
-층이다. `KEEPER_REVIVED`는 복구 완료 알림이고, 세션이 손댈 것은
-`KEEPER_REVIVE_FAILED`뿐이다(대개 `STALE_KEEPER`). 스레드가 닫히면 inbox 또는 점검
-명령이 `{"event": "THREAD_CLOSED"}`를 출력하므로 그때 Monitor를 내린다.
-
-Monitor는 30분마다 만료돼 다시 띄워야 하는데, auto mode처럼 권한 분류기가 있는 환경에서는
-그 재기동이 가끔 거부돼 수신이 끊긴다. 명령이 한 줄이므로 `permissions.allow`에
-`Bash(*codex-slack-bridge monitor --thread *)`를 넣어 두면 분류기를 거치지 않는다
-(Monitor 명령에는 Bash 권한 규칙이 그대로 적용된다). auto mode 분류기는 사용자 전역
-`~/.claude/settings.json`의 규칙을 보므로 거기에 넣는다. 같은 venv에 console script가 없어
-`python -m codex_slack_bridge monitor …` 형태로 나오거나 venv 경로에 공백이 있어 따옴표가 붙으면
-이 패턴에 맞지 않으니, 그때는 open/attach가 돌려준 명령에 맞춰 규칙을 적는다. 규칙이 없는데 거부되면 세션은
-같은 호출을 되풀이하지 않고 폰에 수신이 끊겼다고 알린 뒤 승인을 구한다.
-
-지킴이는 Slack 답장을 append-only inbox에 먼저 저장하므로 Monitor가 잠시 내려가도
-**메시지를 잃지는 않는다.** 세션이 끝나면 지킴이가 부모의 죽음을 확인해 Slack
-스레드도 닫는다.
-
-서버가 재시작되면 메모리의 소유 스레드 목록은 비지만, 떼어낸 지킴이는 살아남는다.
-서버는 재시작 뒤 열린 스레드를 자동 재발견하지 않는다. 지킴이까지 사라졌다면
-`slack_chat_attach`로 다시 붙을 때 소유 목록에 재등록하고 즉시 기동한다. 서버와
-지킴이가 함께 없는 동안에는 되살리기와 자동 마감이 멈춘다는 한계가 있다. 마감 시각은
-상태에 남으므로 attach 뒤 되살아난 지킴이가 이미 지난 마감을 바로 처리한다.
-지킴이의 부모는 최초 spawn한 세션으로 고정되므로, 두 세션이 같은 스레드에 붙어 있어도
-최초 세션이 끝나면 다른 세션의 수신 여부와 무관하게 스레드를 닫는다.
-
-`watch --thread <ts>`는 삭제하지 않았다. Codex CLI 세션에서는 보통 필요 없고,
-Monitor를 쓸 수 없는 tmux·Codex 밖 환경에서 답글이 오면 종료해 깨움 신호를 만드는
-폴백이다.
+현재는 `slack_wait_reply(timeout_seconds=30, thread_ts=...)`로 명시적으로 답장을
+확인할 수 있다. 블로킹 호출이므로 작업 중 수신이나 턴 종료 후 재개를 보장하지 않는다.
+파일 리더 검사와 실제 Codex 수신 상태는 다르므로 대기 중에도 수신자 경고가 발생할 수 있다.
+지킴이 부모는 최초 기동 세션으로 고정된다. 부모 종료 시 스레드가 닫히며, 서버 재시작 시
+열린 스레드를 자동 재발견하지 않으므로 attach가 필요하다.
+자세한 한계와 자동화 후보는 [CODEX_PORT.md](docs/CODEX_PORT.md)에 있다.
 
 ## 폰에서 쓰는 명령
 

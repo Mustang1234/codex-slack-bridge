@@ -24,7 +24,7 @@ from . import threads
 
 INSTRUCTIONS = """\
 Codex CLI 세션과 사용자의 폰(Slack)을 잇는 다리다. 아래 규칙은 이 서버가 배포한다 —
-사용자 쪽 CLAUDE.md 에 같은 내용을 다시 적을 필요가 없다.
+사용자 쪽 AGENTS.md 에 같은 내용을 다시 적을 필요가 없다.
 
 ## 답은 들어온 길로 나간다
 
