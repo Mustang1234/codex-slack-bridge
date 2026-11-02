@@ -119,7 +119,7 @@ STEP1_TAIL = """\
 
   * 봇 이름을 바꾸고 싶으면 위 YAML 대신 아래 출력을 붙여넣는다.
 
-       claude-slack-bridge manifest --name "내 비서"
+       codex-slack-bridge manifest --name "내 비서"
 """
 
 
@@ -137,7 +137,7 @@ STEP2 = """\
 ━━ 3단계 · 알림을 받을 곳 정하기 (Slack 앱) ━━
 
   공개 또는 비공개 채널:
-  1) 받을 채널에서  /invite @Claude Bridge  를 실행해 봇을 초대한다
+  1) 받을 채널에서  /invite @Codex Bridge  를 실행해 봇을 초대한다
   2) 채널명 우클릭 → 링크 복사 → URL 끝의 C 로 시작하는 문자열이 채널 ID
 
   * 1번을 빠뜨리는 것이 압도적인 1위 실패 원인이다. 초대하지 않으면 메시지가
@@ -191,14 +191,14 @@ TOKEN_HELP = """\
     매니페스트로 만들지 않으면 그렇게 된다. 아래를 붙여넣어 앱을 다시 만드는
     편이 빠르다.
 
-       claude-slack-bridge manifest
+       codex-slack-bridge manifest
 """
 
 
 def permission_warning() -> str:
     """설치 마지막에 권한 세 줄을 경고한다.
 
-    권한 분류기가 있는 하네스(Claude Code auto mode 등)에서는 이 서버의 툴이
+    권한 분류기가 있는 하네스(Codex CLI auto mode 등)에서는 이 서버의 툴이
     세션↔스레드 바인딩을 홈에 영구 기록한다는 이유로 막히고, 지킴이를 띄우는
     `keeper-start` 도 데몬 기동이라 같은 판정을 받는다. **그 권한은 모델이
     스스로 넣을 수 없다** — 권한 파일 수정은 자기수정으로 다시 막힌다.
@@ -211,15 +211,15 @@ def permission_warning() -> str:
     return "\n".join([
         _red("━━ 권한 · 하네스를 쓰면 반드시 먼저 넣을 것 ━━"),
         "",
-        "  Claude Code auto mode 처럼 권한 분류기가 있는 환경에서는 이 서버의 툴과",
+        "  Codex CLI auto mode 처럼 권한 분류기가 있는 환경에서는 이 서버의 툴과",
         "  지킴이 기동이 '허가 없는 영속화' 로 분류돼 막힙니다.",
         _red("  모델은 이 권한을 스스로 추가할 수 없습니다 — 설치할 때 사람이 한 번 넣어야 합니다."),
         "",
         "  settings.json 의 permissions.allow 에 세 줄:",
         "",
-        '      "mcp__claude-slack-bridge",',
-        '      "Bash(*claude-slack-bridge keeper-start*)",',
-        '      "Bash(*claude-slack-bridge monitor --thread *)"',
+        '      "mcp__codex-slack-bridge",',
+        '      "Bash(*codex-slack-bridge keeper-start*)",',
+        '      "Bash(*codex-slack-bridge monitor --thread *)"',
         "",
         "  분류기가 없는 환경(권한을 직접 승인하는 설정)이면 지금은 넘어가도 됩니다.",
         "  막히는 증상은 attach 나 Monitor 등록이 거부되는 것으로 나타납니다.",
@@ -253,7 +253,7 @@ def cmd_init(argv: list[str]) -> None:
         print(TOKEN_HELP)
         print(STEP2)
         print("━━ 준비가 끝나면 다시 실행하세요 ━━\n")
-        print("  claude-slack-bridge init\n")
+        print("  codex-slack-bridge init\n")
         return
 
     print()
@@ -342,8 +342,8 @@ def cmd_init(argv: list[str]) -> None:
     path = cfg.save(token, channel, owner_id)
     print("테스트 메시지를 보냈습니다. 폰에서 확인해 보세요.")
     print(f"설정 저장: {path} (권한 600)\n")
-    print("━━ 마지막 · Claude Code 에 붙이기 ━━\n")
-    print("  claude mcp add claude-slack-bridge -s user -- uvx claude-slack-bridge\n")
+    print("━━ 마지막 · Codex CLI 에 붙이기 ━━\n")
+    print("  claude mcp add codex-slack-bridge -s user -- uvx codex-slack-bridge\n")
     print(permission_warning())
 
 
@@ -462,7 +462,7 @@ def _apply_command(
         try:
             slack.post_message(
                 token, channel,
-                f"_지킴이가 살아 있습니다. Claude 세션 수신 여부는 별도 ⚠️ 경고로 알립니다. "
+                f"_지킴이가 살아 있습니다. Codex 세션 수신 여부는 별도 ⚠️ 경고로 알립니다. "
                 f"마감 {until} "
                 f"({chat.fmt_remaining(float(state.get('deadline') or now) - now)} 남음)._",
                 thread_ts=thread,
@@ -614,7 +614,7 @@ def cmd_keeper(argv: list[str]) -> None:
         _die("이미 닫힌 스레드입니다.")
 
     channel = state["channel"]
-    label = state.get("label") or "Claude 세션"
+    label = state.get("label") or "Codex 세션"
     awake = _keep_awake()
     state = threads.patch(
         thread,
@@ -657,7 +657,7 @@ def cmd_keeper(argv: list[str]) -> None:
                     return
                 last_seen = float(current.get("last_seen_ts") or 0)
                 unread = threads.read_inbox(thread, last_seen)
-                reason = "Claude 세션 종료"
+                reason = "Codex 세션 종료"
                 if unread:
                     reason += f"\n읽지 못한 메시지: {len(unread)}건"
                 # 세션이 죽은 것은 대화가 끝난 것이 아니다. 재시작한 세션이 attach 로
@@ -683,7 +683,7 @@ def cmd_keeper(argv: list[str]) -> None:
                         slack.post_message(
                             conf.bot_token, channel,
                             "owner 가 설정돼 있지 않아 이 채널에서는 지시를 받지 않습니다. "
-                            "`claude-slack-bridge init` 을 다시 돌려 주세요",
+                            "`codex-slack-bridge init` 을 다시 돌려 주세요",
                             thread_ts=thread,
                         )
                     except slack.SlackError:
@@ -877,7 +877,7 @@ def _health_text(body: str, state: dict, channel: str, to_thread: str | None) ->
     """
     if to_thread is not None:
         return body
-    label = str(state.get("label") or "Claude 세션")
+    label = str(state.get("label") or "Codex 세션")
     return f"*{label}* ({channel})\n{body}"
 
 
@@ -1086,13 +1086,13 @@ def _monitor_keeper_line(thread: str) -> str | None:
 
 
 def cmd_monitor(argv: list[str]) -> None:
-    """Claude Code Monitor 툴에 넣는 수신 루프. inbox 새 줄을 그대로 흘리고 지킴이를 점검한다.
+    """Codex CLI Monitor 툴에 넣는 수신 루프. inbox 새 줄을 그대로 흘리고 지킴이를 점검한다.
 
     예전에는 open/attach 가 tail·trap·while·case 를 엮은 셸 스크립트를 돌려줬다.
     권한 규칙은 복합 명령의 조각마다 맞아야 하므로 그 스크립트는 허용 규칙 한 줄로
     덮을 수 없었고, auto mode 에서는 매 재기동이 분류기 판정에 걸렸다 — 대부분
     통과했지만 가끔 거부돼 수신이 끊겼다(2026-10-09). 명령 하나로 만들면
-    `Bash(*claude-slack-bridge monitor --thread *)` 로 분류기를 거치지 않는다.
+    `Bash(*codex-slack-bridge monitor --thread *)` 로 분류기를 거치지 않는다.
 
     tail 을 자식으로 띄우지 않고 직접 읽는다. 자식을 두면 이 프로세스가 SIGKILL 로
     죽을 때 고아 tail 이 inbox 를 계속 열어 두고, 수신자 판정(inbox_tailed)이 죽은
@@ -1188,8 +1188,8 @@ def cmd_doctor(argv: list[str]) -> None:
     if conf is None:
         _die(
             "설정이 없습니다.\n"
-            "  → claude-slack-bridge init\n"
-            "  (또는 SLACK_BOT_TOKEN / SLACK_CHANNEL 환경변수)"
+            "  → codex-slack-bridge init\n"
+            "  (또는 CODEX_SLACK_BRIDGE_BOT_TOKEN / CODEX_SLACK_BRIDGE_CHANNEL 환경변수)"
         )
     print(f"토큰: {conf.masked_token}")
     print(f"채널: {conf.channel}")
@@ -1216,26 +1216,26 @@ def cmd_doctor(argv: list[str]) -> None:
 
 
 USAGE = """\
-claude-slack-bridge — Claude Code 세션과 Slack 을 잇는 MCP 서버
+codex-slack-bridge — Codex CLI 세션과 Slack 을 잇는 MCP 서버
 
-  claude-slack-bridge            MCP 서버로 동작 (claude mcp add 가 이렇게 부른다)
-  claude-slack-bridge init       설정 생성 — 준비가 안 됐으면 절차를 안내한다
-  claude-slack-bridge manifest   Slack 콘솔에 붙여넣을 앱 매니페스트를 출력한다
+  codex-slack-bridge            MCP 서버로 동작 (claude mcp add 가 이렇게 부른다)
+  codex-slack-bridge init       설정 생성 — 준비가 안 됐으면 절차를 안내한다
+  codex-slack-bridge manifest   Slack 콘솔에 붙여넣을 앱 매니페스트를 출력한다
                                  --name "이름" 으로 봇 이름을 바꿀 수 있다
-  claude-slack-bridge token-help  Bot User OAuth Token 받는 법을 출력한다
-  claude-slack-bridge watch --thread <ts>
+  codex-slack-bridge token-help  Bot User OAuth Token 받는 법을 출력한다
+  codex-slack-bridge watch --thread <ts>
                                  답글이 오면 종료한다. 백그라운드로 띄우면
-                                 그 종료가 곧 깨움 신호가 된다. Claude Code 세션은
+                                 그 종료가 곧 깨움 신호가 된다. Codex CLI 세션은
                                  보통 Monitor 로 inbox 를 tail 하므로 필요 없으며,
-                                 tmux·Claude 밖 환경을 위한 폴백이다
-  claude-slack-bridge keeper-start --thread <ts>
+                                 tmux·Codex 밖 환경을 위한 폴백이다
+  codex-slack-bridge keeper-start --thread <ts>
                                  지킴이를 수동 기동·진단한다. 보통은 MCP 서버가
                                  자동으로 띄우고 되살린다
-  claude-slack-bridge monitor --thread <ts>
+  codex-slack-bridge monitor --thread <ts>
                                  inbox 새 줄을 흘리고 60초마다 지킴이를 점검한다.
-                                 open/attach 가 돌려주는 Claude Code Monitor 명령이다
-  claude-slack-bridge targets    설정한 기본 목적지와 초대된 채널을 본다
-  claude-slack-bridge doctor     현재 설정이 살아있는지 점검한다
+                                 open/attach 가 돌려주는 Codex CLI Monitor 명령이다
+  codex-slack-bridge targets    설정한 기본 목적지와 초대된 채널을 본다
+  codex-slack-bridge doctor     현재 설정이 살아있는지 점검한다
 """
 
 

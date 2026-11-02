@@ -1,7 +1,7 @@
 """폰과의 양방향 대화.
 
 ntfy 시절에는 프로세스가 둘이었다. 채널을 붙들고 받아 적는 보유자와, 새 줄이
-생기면 종료해서 Claude 를 깨우는 감시자. 브로커에 이력이 없어 누군가는 계속
+생기면 종료해서 Codex 를 깨우는 감시자. 브로커에 이력이 없어 누군가는 계속
 받아 적고 있어야 했기 때문이다.
 
 Slack 에는 이력이 남는다. 그래서 받아 적는 쪽이 통째로 사라지고, 깨우는 쪽만
@@ -45,7 +45,7 @@ CLOSE_NOTICE_GRACE = 30 * 60
 # 돌아오는 것까지 막는 문이 아니다 — 막았더니 상태 파일을 손으로 고쳐 돌아왔다
 # (2026-09-17). 새 기록은 close_thread 가 resumable 로 남기므로, 이 목록은 그
 # 필드가 생기기 전에 닫힌 기록을 읽을 때만 쓴다.
-_RESUMABLE_REASONS = ("Claude 세션 종료", "대화를 다른 곳으로 옮겼습니다", "마감 시각 도달")
+_RESUMABLE_REASONS = ("Codex 세션 종료", "대화를 다른 곳으로 옮겼습니다", "마감 시각 도달")
 
 
 def resumable(state: dict) -> bool:
@@ -119,7 +119,7 @@ def attach(
             pass
 
     requested_label = label
-    label = label or state.get("label") or "Claude 세션"
+    label = label or state.get("label") or "Codex 세션"
     label_changed = bool(requested_label) and label != state.get("label")
     if hours is not None:
         deadline = time.time() + hours * 3600
@@ -387,7 +387,7 @@ def open_chat(token: str, channel: str, hours: float, label: str | None) -> Chat
     세션은 스레드를 여러 개 쥘 수 있다. 스레드는
     개수 제한이 없으므로 미리 만들어 둘 것도 반납할 것도 없다.
     """
-    head = label or "Claude 세션"
+    head = label or "Codex 세션"
     deadline = time.time() + hours * 3600
     res = slack.post_message(token, channel, header_text(head, deadline))
 
@@ -426,7 +426,7 @@ def extend(token: str, hours: float, thread_ts: str | None = None) -> Chat:
     try:
         slack.chat_update(
             token, chat.channel, chat.thread_ts,
-            header_text(chat.label or "Claude 세션", chat.deadline),
+            header_text(chat.label or "Codex 세션", chat.deadline),
         )
     except slack.SlackError:
         # 머리글 갱신에 실패해도 마감 자체는 늘어난 상태다. 표시가 어긋나는 것과
@@ -500,7 +500,7 @@ def close_chat(
         return
     chat = current(thread_ts)
     close_thread(
-        token, chat.channel, chat.thread_ts, chat.label or "Claude 세션", reason,
+        token, chat.channel, chat.thread_ts, chat.label or "Codex 세션", reason,
         resumable=resumable,
     )
     forget(chat.thread_ts)

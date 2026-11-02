@@ -30,8 +30,8 @@ except ImportError:  # pragma: no cover - Windows 에는 없다.
     fcntl = None
 
 THREADS_DIR = Path(
-    os.environ.get("CLAUDE_SLACK_BRIDGE_THREADS_DIR")
-    or os.path.expanduser("~/.claude-slack-bridge/threads")
+    os.environ.get("CODEX_SLACK_BRIDGE_THREADS_DIR")
+    or os.path.expanduser("~/.codex-slack-bridge/threads")
 )
 KEEPER_PROTOCOL = "inbox-v1"
 SIDECAR_SUFFIXES = (".inbox.jsonl", ".lock", ".keeper.log")
@@ -287,7 +287,7 @@ def _proc_is(pid, needle: str) -> bool:
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return False
-    bridge_process = "claude-slack-bridge" in out or "claude_slack_bridge" in out
+    bridge_process = "codex-slack-bridge" in out or "codex_slack_bridge" in out
     return bridge_process and needle in out
 
 
@@ -312,11 +312,11 @@ def keeper_command(thread_ts: str, *, subcommand: str = "keeper") -> list[str]:
     # MCP 서버의 argv[0]은 uvx나 다른 래퍼일 수 있으므로 같은 venv의 console
     # script를 찾는다. 없을 때만 -m으로 재진입하며 _proc_is는 양쪽 표기를 받는다.
     executable = Path(os.path.abspath(sys.executable))
-    console_script = executable.parent / "claude-slack-bridge"
+    console_script = executable.parent / "codex-slack-bridge"
     if console_script.is_file():
         return [str(console_script), subcommand, "--thread", thread_ts]
     return [
-        str(executable), "-m", "claude_slack_bridge", subcommand, "--thread", thread_ts,
+        str(executable), "-m", "codex_slack_bridge", subcommand, "--thread", thread_ts,
     ]
 
 
@@ -349,7 +349,7 @@ def spawn_keeper(
     THREADS_DIR.mkdir(parents=True, exist_ok=True)
     ensure_inbox(thread_ts)
     child_env = os.environ.copy()
-    child_env["CLAUDE_SLACK_BRIDGE_THREADS_DIR"] = str(THREADS_DIR)
+    child_env["CODEX_SLACK_BRIDGE_THREADS_DIR"] = str(THREADS_DIR)
     with open(log, "ab") as fh:
         proc = subprocess.Popen(
             cmd,
@@ -385,7 +385,7 @@ def watcher_alive(thread_ts: str) -> bool:
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return False
-    return "claude-slack-bridge" in out and "watch" in out
+    return "codex-slack-bridge" in out and "watch" in out
 
 
 def inbox_tailed(thread_ts: str) -> bool:

@@ -1,15 +1,15 @@
-# claude-slack-bridge
+# codex-slack-bridge
 
-Claude Code 세션과 Slack 을 잇는 MCP 서버. 자리를 비운 사이 세션이 먼저 알림을
+Codex CLI 세션과 Slack 을 잇는 MCP 서버. 자리를 비운 사이 세션이 먼저 알림을
 보내고, 폰에서 이어서 확인한다.
 
-특정 프로젝트에 종속되지 않는다. `claude mcp add` 한 줄이면 어느 Claude Code 에서든
+특정 프로젝트에 종속되지 않는다. `claude mcp add` 한 줄이면 어느 Codex CLI 에서든
 붙는다.
 
 ## 왜 서버가 필요 없나
 
 "MCP 서버"의 서버는 호스팅하는 서버가 아니라 **내 컴퓨터에서 도는 프로세스**다.
-Claude Code 가 필요할 때 띄우고 세션이 끝나면 같이 죽는다. 배포도, 포트 개방도,
+Codex CLI 가 필요할 때 띄우고 세션이 끝나면 같이 죽는다. 배포도, 포트 개방도,
 공인 IP 도 없다.
 
 Slack 수신도 폴링(`conversations.replies`)이라 **바깥에서 내 컴퓨터로 들어오는
@@ -22,11 +22,11 @@ Socket Mode 나 Events API 를 쓰면 토큰이 둘로 늘고 설치 단계가 �
 ```bash
 # 1) Slack 앱 등록 + 토큰 발급 + 멤버 ID와 목적지 준비 — docs/SETUP.md 참고
 # 2) 설정하고 연결까지 확인
-uvx --from git+https://github.com/Mustang1234/claude-slack-bridge claude-slack-bridge init
+uvx --from git+https://github.com/Mustang1234/codex-slack-bridge codex-slack-bridge init
 
-# 3) Claude Code 에 붙이기
-claude mcp add claude-slack-bridge -s user -- \
-  uvx --from git+https://github.com/Mustang1234/claude-slack-bridge claude-slack-bridge
+# 3) Codex CLI 에 붙이기
+claude mcp add codex-slack-bridge -s user -- \
+  uvx --from git+https://github.com/Mustang1234/codex-slack-bridge codex-slack-bridge
 ```
 
 `-s user` 는 모든 프로젝트에서 쓰겠다는 뜻이다. 알림은 어느 프로젝트에서 일하든
@@ -52,14 +52,14 @@ claude mcp add claude-slack-bridge -s user -- \
 
 | 명령 | 하는 일 |
 |---|---|
-| `claude-slack-bridge` | MCP 서버로 동작 (`claude mcp add` 가 이렇게 부른다) |
+| `codex-slack-bridge` | MCP 서버로 동작 (`claude mcp add` 가 이렇게 부른다) |
 | `init` | 설정 생성 + 연결 확인 + 테스트 메시지 발송 |
 | `manifest` | Slack 콘솔에 붙여넣을 앱 매니페스트 출력 (`--name` 으로 봇 이름 변경) |
 | `token-help` | Bot User OAuth Token 받는 법 출력 |
 | `targets` | 설정한 기본 목적지와 봇이 들어간 채널 확인 |
 | `keeper-start --thread <ts>` | 지킴이 수동 기동·진단 (보통은 MCP 서버가 자동 기동) |
-| `monitor --thread <ts>` | inbox 새 줄을 흘리고 60초마다 지킴이 점검 (Claude Code Monitor 툴에 넣는 명령) |
-| `watch --thread <ts>` | tmux·Claude 밖에서 쓰는 폴백 감시자 |
+| `monitor --thread <ts>` | inbox 새 줄을 흘리고 60초마다 지킴이 점검 (Codex CLI Monitor 툴에 넣는 명령) |
+| `watch --thread <ts>` | tmux·Codex 밖에서 쓰는 폴백 감시자 |
 | `doctor` | 현재 설정이 살아있는지 점검 |
 
 `init` 은 준비가 안 된 사람에게 **절차부터 안내한다.** uvx 로 설치하면 레포가 없어서
@@ -69,7 +69,7 @@ claude mcp add claude-slack-bridge -s user -- \
 봇 이름은 원하는 대로 정할 수 있다.
 
 ```bash
-claude-slack-bridge manifest --name "내 비서"
+codex-slack-bridge manifest --name "내 비서"
 ```
 
 ## 채널에 봇을 못 넣는 경우
@@ -120,12 +120,12 @@ Slack을 읽는 지킴이와 세션을 깨우는 Monitor가 역할을 나눈다.
 | | 소유 | 사용자가 Esc | 하는 일 |
 |---|---|---|---|
 | **지킴이** | MCP 서버가 기동, 프로세스는 떼어냄 | **안 죽음** | 마감·연장·`핑`·수신확인 |
-| **Monitor** (persistent) | Claude Code | **안 죽음** | inbox 새 줄마다 세션 깨움 |
+| **Monitor** (persistent) | Codex CLI | **안 죽음** | inbox 새 줄마다 세션 깨움 |
 
 `slack_chat_open`이나 `slack_chat_attach`가 지킴이를 직접 띄우고, MCP 서버 안의 감시
 스레드가 30초마다 죽었는지 확인해 되살린다. 두 툴은 inbox 새 줄을 흘리면서 60초마다
-지킴이를 점검하는 `claude-slack-bridge monitor --thread <ts>` 명령도 돌려준다. 그 명령을
-그대로 Claude Code Monitor 툴(persistent)에 넣는다.
+지킴이를 점검하는 `codex-slack-bridge monitor --thread <ts>` 명령도 돌려준다. 그 명령을
+그대로 Codex CLI Monitor 툴(persistent)에 넣는다.
 
 Monitor는 stdout 한 줄마다 세션을 깨우며 이벤트마다 끝나지 않는다. 서버의 30초 감시가
 첫 번째 복구 층이고, Monitor의 60초 점검은 서버까지 죽었을 때 지킴이를 되살리는 두 번째
@@ -135,10 +135,10 @@ Monitor는 stdout 한 줄마다 세션을 깨우며 이벤트마다 끝나지 �
 
 Monitor는 30분마다 만료돼 다시 띄워야 하는데, auto mode처럼 권한 분류기가 있는 환경에서는
 그 재기동이 가끔 거부돼 수신이 끊긴다. 명령이 한 줄이므로 `permissions.allow`에
-`Bash(*claude-slack-bridge monitor --thread *)`를 넣어 두면 분류기를 거치지 않는다
+`Bash(*codex-slack-bridge monitor --thread *)`를 넣어 두면 분류기를 거치지 않는다
 (Monitor 명령에는 Bash 권한 규칙이 그대로 적용된다). auto mode 분류기는 사용자 전역
 `~/.claude/settings.json`의 규칙을 보므로 거기에 넣는다. 같은 venv에 console script가 없어
-`python -m claude_slack_bridge monitor …` 형태로 나오거나 venv 경로에 공백이 있어 따옴표가 붙으면
+`python -m codex_slack_bridge monitor …` 형태로 나오거나 venv 경로에 공백이 있어 따옴표가 붙으면
 이 패턴에 맞지 않으니, 그때는 open/attach가 돌려준 명령에 맞춰 규칙을 적는다. 규칙이 없는데 거부되면 세션은
 같은 호출을 되풀이하지 않고 폰에 수신이 끊겼다고 알린 뒤 승인을 구한다.
 
@@ -154,8 +154,8 @@ Monitor는 30분마다 만료돼 다시 띄워야 하는데, auto mode처럼 권
 지킴이의 부모는 최초 spawn한 세션으로 고정되므로, 두 세션이 같은 스레드에 붙어 있어도
 최초 세션이 끝나면 다른 세션의 수신 여부와 무관하게 스레드를 닫는다.
 
-`watch --thread <ts>`는 삭제하지 않았다. Claude Code 세션에서는 보통 필요 없고,
-Monitor를 쓸 수 없는 tmux·Claude 밖 환경에서 답글이 오면 종료해 깨움 신호를 만드는
+`watch --thread <ts>`는 삭제하지 않았다. Codex CLI 세션에서는 보통 필요 없고,
+Monitor를 쓸 수 없는 tmux·Codex 밖 환경에서 답글이 오면 종료해 깨움 신호를 만드는
 폴백이다.
 
 ## 폰에서 쓰는 명령
@@ -193,9 +193,9 @@ Monitor를 쓸 수 없는 tmux·Claude 밖 환경에서 답글이 오면 종료�
 채널에서는 옆에서 오가는 대화까지 지시가 되어 남이 무심코 쓴 말이 작업을 움직인다.
 그래서 **봇을 @멘션한 소유자와 소유자가 허용한 listener의 답글만** 지시로 받는다.
 스레드 안의 `듣기 @사람`·`그만 @사람`은 그 스레드에만 적용한다. 목록은
-`~/.claude-slack-bridge/threads/<ts>.json`의 `listeners`에 저장하며 닫히면 비운다.
+`~/.codex-slack-bridge/threads/<ts>.json`의 `listeners`에 저장하며 닫히면 비운다.
 `채널 듣기 @사람`·`채널 그만 @사람`을 명시하면 채널 전체의 모든 스레드에 적용하고,
-목록은 `~/.claude-slack-bridge/channels.json`에 권한 600으로 저장하며 스레드가 닫혀도 남는다.
+목록은 `~/.codex-slack-bridge/channels.json`에 권한 600으로 저장하며 스레드가 닫혀도 남는다.
 `채널듣기`·`채널그만`으로 붙여 써도 된다.
 수신 대상은 두 목록의 합집합이다. 한 범위에서 빼도 다른 범위에 남아 있으면 계속 듣는다.
 `누구 듣니`는 두 목록을 각각 보여준다. 모든 명령은 봇을 @멘션하여 스레드 안에서 보낸다.
@@ -213,7 +213,7 @@ listener 는 **그 스레드 안의 질문**까지만 지시가 된다. 세션�
 같은 스레드 ID 가 예전에 남의 입에서 나왔다는 이유로 owner 의 지시를 막지 않는다.
 
 같은 이유로 **대화에 실려 온 thread_ts·채널 ID 는 참고 자료일 뿐**이다. 지금 쥔 스레드는
-`~/.claude-slack-bridge/threads/<ts>.json`(= `slack_chat_list`)만이 답하며, 인계 문서에
+`~/.codex-slack-bridge/threads/<ts>.json`(= `slack_chat_list`)만이 답하며, 인계 문서에
 손으로 옮겨 적은 ts 도 목록과 어긋나면 목록이 맞다.
 
 ## 설정
@@ -221,11 +221,11 @@ listener 는 **그 스레드 안의 질문**까지만 지시가 된다. 세션�
 토큰은 **레포 안에 두지 않는다.**
 
 ```
-~/.claude-slack-bridge/config.json   (권한 600)
-~/.claude-slack-bridge/channels.json (채널별 listener, 권한 600)
+~/.codex-slack-bridge/config.json   (권한 600)
+~/.codex-slack-bridge/channels.json (채널별 listener, 권한 600)
 ```
 
-환경변수 `SLACK_BOT_TOKEN` / `SLACK_CHANNEL` 은 설정 파일보다 우선한다. `owner_id`는 설정 파일 값을 우선하고, 비어 있을 때만 `SLACK_OWNER_ID`를 쓴다.
+환경변수 `CODEX_SLACK_BRIDGE_BOT_TOKEN` / `CODEX_SLACK_BRIDGE_CHANNEL` 은 설정 파일보다 우선한다. `owner_id`는 설정 파일 값을 우선하고, 비어 있을 때만 `CODEX_SLACK_BRIDGE_OWNER_ID`를 쓴다.
 설정이 없으면 조용히 아무것도 하지 않으므로, 설치만 해두고 나중에 설정해도 된다.
 
 ### 발신자 이름·아이콘
@@ -237,20 +237,20 @@ listener 는 **그 스레드 안의 질문**까지만 지시가 된다. 세션�
 
 ```json
 {
-  "display_name": "KHJ's Claude Code",
+  "display_name": "KHJ's Codex CLI",
   "icon_emoji": ":robot_face:"
 }
 ```
 
 `icon_url` 로 이미지 URL 을 줄 수도 있다(`icon_emoji` 가 있으면 그쪽이 우선). 둘 다
 비우면 앱 아이콘(Basic Information → App Icon)이 쓰인다. 환경변수는
-`SLACK_DISPLAY_NAME` / `SLACK_ICON_EMOJI` / `SLACK_ICON_URL`. 스코프가 없으면 Slack 이
+`CODEX_SLACK_BRIDGE_DISPLAY_NAME` / `CODEX_SLACK_BRIDGE_ICON_EMOJI` / `CODEX_SLACK_BRIDGE_ICON_URL`. 스코프가 없으면 Slack 이
 값을 조용히 무시하고 봇 프로필 이름으로 나간다.
 
 ### "작업 중" 표시 (에이전트 세션)
 
 폰에서 말을 보내면 세션이 답하기까지 시간이 걸리고, 그 사이 스레드는 조용하다.
-예전에는 지킴이가 10초 뒤 "받았습니다" 를 답글로 남겼는데, Claude 가 답을 만드는
+예전에는 지킴이가 10초 뒤 "받았습니다" 를 답글로 남겼는데, Codex 가 답을 만드는
 시간이 거의 늘 10초를 넘겨 매번 붙었고 이력에도 남았다.
 
 매니페스트에 `features.agent_view` 가 있으면(0.28.0 부터 기본 포함) 답글 대신 Slack

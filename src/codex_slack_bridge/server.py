@@ -1,6 +1,6 @@
 """MCP 서버.
 
-Claude Code 가 stdio 로 이 프로세스를 띄우고, 세션이 끝나면 같이 죽는다.
+Codex CLI 가 stdio 로 이 프로세스를 띄우고, 세션이 끝나면 같이 죽는다.
 호스팅도 포트도 없다.
 
 세션마다 프로세스가 하나씩 뜨므로 세션 격리가 공짜로 따라온다. ntfy 시절
@@ -23,7 +23,7 @@ from . import slack
 from . import threads
 
 INSTRUCTIONS = """\
-Claude Code 세션과 사용자의 폰(Slack)을 잇는 다리다. 아래 규칙은 이 서버가 배포한다 —
+Codex CLI 세션과 사용자의 폰(Slack)을 잇는 다리다. 아래 규칙은 이 서버가 배포한다 —
 사용자 쪽 CLAUDE.md 에 같은 내용을 다시 적을 필요가 없다.
 
 ## 답은 들어온 길로 나간다
@@ -118,7 +118,7 @@ DM 으로 나간다.
 
 ## 스레드를 쥐었으면 Monitor 가 떠 있어야 한다
 
-`open`·`attach` 결과가 돌려주는 Monitor 명령을 Claude Code Monitor 툴(persistent)에서
+`open`·`attach` 결과가 돌려주는 Monitor 명령을 Codex CLI Monitor 툴(persistent)에서
 그대로 실행한다. inbox 새 줄을 흘리면서 60초마다 지킴이 생존을 확인해 죽었으면
 되살린다. **`attach` 뒤에도 해당 스레드의 Monitor가 없으면 반드시 띄운다** — Monitor 는 앞 세션에서 물려받을 수
 없고, 없으면 폰 답장은 파일에만 쌓이고 세션은 깨어나지 않는다. 폰에서는 그것이
@@ -135,8 +135,8 @@ DM 으로 나간다.
 지킴이 유예는 60초라 1분 안에 띄우면 애초에 나가지 않는다).
 
 **재기동이 권한 분류기에 거부되면 먼저 폰에 알린다.** Monitor 명령은
-`claude-slack-bridge monitor --thread <ts>` 한 줄이라 `permissions.allow` 에
-`Bash(*claude-slack-bridge monitor --thread *)` 가 있으면 분류기를 거치지 않는다. 그 규칙이
+`codex-slack-bridge monitor --thread <ts>` 한 줄이라 `permissions.allow` 에
+`Bash(*codex-slack-bridge monitor --thread *)` 가 있으면 분류기를 거치지 않는다. 그 규칙이
 없는 환경에서 거부되면 같은 호출을 되풀이하지 않는다 — 거부는 권한 레이어의 판정이다.
 대신 `slack_notify` 로 "수신이 끊겼다, 재기동 승인이 필요하다" 를 스레드에 남기고 사용자에게
 승인을 구한다. 폰이 아무 말 없이 끊긴 채로 남는 것이 제일 나쁘다.
@@ -178,7 +178,7 @@ DM 으로 나간다.
 속한 스레드를 가리킬 뿐, 이 세션이 붙어 있는 스레드와는 무관하다. 둘을 섞으면 "우리가
 쓰던 스레드가 아니다" 라는 착각이 생기고, 멀쩡한 스레드를 닫고 남의 스레드로 옮기게 된다.
 
-스레드 상태의 정본은 `~/.claude-slack-bridge/threads/<ts>.json`이다 — `thread_ts`·`channel`·`closed`·
+스레드 상태의 정본은 `~/.codex-slack-bridge/threads/<ts>.json`이다 — `thread_ts`·`channel`·`closed`·
 `deadline` 이 거기 있고 `slack_chat_list` 가 그중 안 닫힌 것만 보여 준다. **지금 어디에
 붙어 있는지는 목록의 `*`/`**`로, 재시작 뒤 어디로 돌아갈지는 이 목록으로 답한다.** 인계 문서에 손으로 옮겨
 적은 ts 도 믿지 않는다 — 목록과 어긋나면 목록이 맞다.
@@ -231,14 +231,14 @@ Slack URL을 목적지로 받으면 채널 URL은 그 채널에 새 스레드를
 """
 
 server = MCPServer(
-    name="claude-slack-bridge",
+    name="codex-slack-bridge",
     version="1.4.2",
     instructions=INSTRUCTIONS,
 )
 
 SETUP_HINT = (
     "Slack 설정이 없어 알림을 건너뜁니다. "
-    "`uvx claude-slack-bridge init` 으로 한 번만 설정하면 됩니다."
+    "`uvx codex-slack-bridge init` 으로 한 번만 설정하면 됩니다."
 )
 
 
@@ -732,7 +732,7 @@ def _own(thread_ts: str) -> None:
         _KEEPER_THREAD_STARTED = True
         threading.Thread(
             target=_keeper_loop,
-            name="claude-slack-bridge-keeper",
+            name="codex-slack-bridge-keeper",
             daemon=True,
         ).start()
 
@@ -763,7 +763,7 @@ def _startup_lines(c: chatmod.Chat, keeper_status: str) -> str:
     script = shlex.join(threads.keeper_command(c.thread_ts, subcommand="monitor"))
     return (
         f"{keeper_status}\n"
-        "Claude Code Monitor 툴(persistent)에 아래 명령을 그대로 넣는다:\n"
+        "Codex CLI Monitor 툴(persistent)에 아래 명령을 그대로 넣는다:\n"
         f"{script}\n"
         "지킴이 기동은 서버가 하고(30초 주기), 이 명령의 60초 점검은 "
         "서버가 죽었을 때의 두 번째 층이다. THREAD_CLOSED 가 오면 Monitor 를 "
@@ -1029,7 +1029,7 @@ def slack_wait_reply(timeout_seconds: int = 600, thread_ts: str | None = None) -
     title="기존 스레드에 붙기",
     description=(
         "이미 있는 Slack 스레드에 이 세션을 묶는다. 붙을 대상은 slack_chat_list "
-        "(= ~/.claude-slack-bridge/threads/<ts>.json) 에서 찾는다 — 인계 문서나 "
+        "(= ~/.codex-slack-bridge/threads/<ts>.json) 에서 찾는다 — 인계 문서나 "
         "대화 속 링크의 thread_ts 를 그대로 쓰지 않는다. 세션이 재시작돼 자기가 열어둔 "
         "스레드로 돌아갈 때, 또는 다른 세션이 연 스레드를 이어받을 때 쓴다. "
         "머리글을 새로 올리지 않으므로 폰에 같은 작업의 스레드가 쌓이지 않는다. "

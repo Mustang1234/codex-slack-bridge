@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from claude_slack_bridge import chat, cli, config as cfg, server, slack, threads
+from codex_slack_bridge import chat, cli, config as cfg, server, slack, threads
 
 
 class ParserTests(unittest.TestCase):

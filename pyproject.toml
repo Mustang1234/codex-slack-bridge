@@ -1,7 +1,7 @@
 [project]
-name = "claude-slack-bridge"
+name = "codex-slack-bridge"
 version = "1.4.2"
-description = "Claude Code 세션과 Slack 을 잇는 MCP 서버 — 자리를 비운 사이 알림을 받고 폰에서 답장한다"
+description = "Codex CLI 세션과 Slack 을 잇는 MCP 서버 — 자리를 비운 사이 알림을 받고 폰에서 답장한다"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -10,11 +10,11 @@ dependencies = [
 ]
 
 [project.scripts]
-claude-slack-bridge = "claude_slack_bridge.cli:main"
+codex-slack-bridge = "codex_slack_bridge.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/claude_slack_bridge"]
+packages = ["src/codex_slack_bridge"]

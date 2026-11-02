@@ -4,7 +4,7 @@
 이력에 한 번만 들어가도 되돌릴 수 없다. 그래서 홈 디렉터리 밖에 두고 권한을 좁힌다.
 
 토큰·채널 등은 환경변수 > 설정 파일이다 — 파일을 두기 곤란한 환경에서도 돌아야 한다.
-owner_id만은 설정 파일 값이 먼저고, 비어 있을 때만 SLACK_OWNER_ID를 쓴다. 파일 루트
+owner_id만은 설정 파일 값이 먼저고, 비어 있을 때만 CODEX_SLACK_BRIDGE_OWNER_ID를 쓴다. 파일 루트
 owner_id 하나만으로 따로 설정하지 않아도 주인이 정해져야 하기 때문이다.
 """
 
@@ -16,7 +16,7 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
-CONFIG_DIR = Path(os.path.expanduser("~/.claude-slack-bridge"))
+CONFIG_DIR = Path(os.path.expanduser("~/.codex-slack-bridge"))
 CONFIG_PATH = CONFIG_DIR / "config.json"
 CHANNELS_PATH = CONFIG_DIR / "channels.json"
 
@@ -39,8 +39,8 @@ class Config:
 
 def load() -> Config | None:
     """설정을 읽는다. 없거나 불완전하면 None — 호출부는 조용히 no-op 한다."""
-    token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
-    channel = os.environ.get("SLACK_CHANNEL", "").strip()
+    token = os.environ.get("CODEX_SLACK_BRIDGE_BOT_TOKEN", "").strip()
+    channel = os.environ.get("CODEX_SLACK_BRIDGE_CHANNEL", "").strip()
 
     raw = {}
     if CONFIG_PATH.exists():
@@ -62,10 +62,10 @@ def load() -> Config | None:
     else:
         display_name = icon_emoji = icon_url = ""
     owner = str(raw.get("owner_id", "")).strip()
-    owner = owner or os.environ.get("SLACK_OWNER_ID", "").strip()
-    display_name = os.environ.get("SLACK_DISPLAY_NAME", display_name).strip()
-    icon_emoji = os.environ.get("SLACK_ICON_EMOJI", icon_emoji).strip()
-    icon_url = os.environ.get("SLACK_ICON_URL", icon_url).strip()
+    owner = owner or os.environ.get("CODEX_SLACK_BRIDGE_OWNER_ID", "").strip()
+    display_name = os.environ.get("CODEX_SLACK_BRIDGE_DISPLAY_NAME", display_name).strip()
+    icon_emoji = os.environ.get("CODEX_SLACK_BRIDGE_ICON_EMOJI", icon_emoji).strip()
+    icon_url = os.environ.get("CODEX_SLACK_BRIDGE_ICON_URL", icon_url).strip()
 
     if not token or not channel:
         return None

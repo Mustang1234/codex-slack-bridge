@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from claude_slack_bridge import chat, slack, threads
+from codex_slack_bridge import chat, slack, threads
 
 
 class CloseNoticeTests(unittest.TestCase):
