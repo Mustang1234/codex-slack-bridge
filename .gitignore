@@ -41,3 +41,4 @@ uv.lock
 
 # Local dependency cache
 .cache/
+tests/uv-*.lock

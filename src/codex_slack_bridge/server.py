@@ -105,57 +105,29 @@ DM 으로 나간다.
 `slack_chat_list` 로 찾는다. 지킴이의 부모는 최초 spawn 한 세션으로 고정되므로, 두 세션이
 붙어 있어도 최초 세션이 끝나면 스레드가 닫힌다.
 
-붙은 스레드마다 Monitor 하나를 유지한다. Monitor 줄의 `thread_ts`를
+수신한 메시지의 `thread_ts`를
 `slack_notify(thread_ts=...)`에 그대로 넘겨 **온 스레드로 답한다**. `thread_ts`를
 빼면 마지막에 붙은 기본 스레드로 가므로, 둘 이상 쥐었을 때는 반드시 지정한다.
 `slack_wait_reply(thread_ts=...)`도 기다릴 스레드를 지정할 수 있다.
-끝난 스레드는 `slack_chat_close(thread_ts=...)`로 하나씩 닫고 해당 Monitor를 내린다.
+끝난 스레드는 `slack_chat_close(thread_ts=...)`로 하나씩 닫고 해당 수신 루프를 종료한다.
 `slack_chat_list`의 `*`는 이 세션이 쥔 스레드, `**`는 기본 스레드다.
 이미 쥔 스레드에 다시 attach하면 라벨만 갱신하고 기본으로 올린다.
 
 **DM 스레드를 닫고 다른 곳으로 옮기는 동작은 `slack_chat_switch`다.** switch는
 기본 스레드만 먼저 닫고 옮긴다. 다른 스레드도 함께 들으려면 attach로 추가한다.
 
-## 스레드를 쥐었으면 Monitor 가 떠 있어야 한다
+## Codex 수신 방식
 
-`open`·`attach` 결과가 돌려주는 Monitor 명령을 Codex CLI Monitor 툴(persistent)에서
-그대로 실행한다. inbox 새 줄을 흘리면서 60초마다 지킴이 생존을 확인해 죽었으면
-되살린다. **`attach` 뒤에도 해당 스레드의 Monitor가 없으면 반드시 띄운다** — Monitor 는 앞 세션에서 물려받을 수
-없고, 없으면 폰 답장은 파일에만 쌓이고 세션은 깨어나지 않는다. 폰에서는 그것이
-"죽었나" 로 읽힌다. 불변식은 하나다: *쥔 스레드마다 이 세션에 Monitor 하나가 떠 있다.*
-스레드를 쥐는 순간과 폰에 답을 보내려는 순간, 이것을 먼저 확인한다.
-
-**Monitor 가 만료되면 묻지 않고 즉시 같은 명령으로 다시 띄운다.** Monitor 는 최대
-30분이면 harness 가 내리고 만료 알림 한 줄만 남긴다. 그 알림은 사용자 입력이 아니라 할
-일이다 — DM 이든 공개 채널이든, 계속 붙어 있을지 사용자에게 물어볼 참이든 먼저 다시
-띄우고 나서 묻는다. **긴 작업 도중에 알림이 와도 마찬가지다.** 알림은 도구 호출 사이에
-전달되고, 재기동은 같은 명령 한 번이라 몇 초면 끝나며 하던 작업에 아무 영향이 없다 —
-파일도 빌드도 건드리지 않고 그 자리에서 띄운 뒤 하던 일을 그대로 잇는다. 코드를 다 읽고,
-빌드가 끝나고, 답을 다 쓴 뒤로 미루면 그 시간 전체가 수신 공백이다(실측: 재기동을 10분 미뤄 ⚠️ 가 나갔다.
-지킴이 유예는 60초라 1분 안에 띄우면 애초에 나가지 않는다).
-
-**재기동이 권한 분류기에 거부되면 먼저 폰에 알린다.** Monitor 명령은
-`codex-slack-bridge monitor --thread <ts>` 한 줄이라 `permissions.allow` 에
-`Bash(*codex-slack-bridge monitor --thread *)` 가 있으면 분류기를 거치지 않는다. 그 규칙이
-없는 환경에서 거부되면 같은 호출을 되풀이하지 않는다 — 거부는 권한 레이어의 판정이다.
-대신 `slack_notify` 로 "수신이 끊겼다, 재기동 승인이 필요하다" 를 스레드에 남기고 사용자에게
-승인을 구한다. 폰이 아무 말 없이 끊긴 채로 남는 것이 제일 나쁘다.
-
-내려간 채 두면 잠시 뒤 지킴이가 "수신자(Monitor)가 붙어 있지
-않습니다" ⚠️ 를 올린다 — DM 스레드면 그 스레드에, 채널 스레드면 소유자 DM 으로 간다.
-어느 쪽이든 사용자에게는 "세션이 죽었다" 로 보인다. 스레드에서 빠지고 싶으면 Monitor 를
-방치하지 말고 `slack_chat_close` 로 닫는다.
-
-지킴이 기동은 서버가 한다(open/attach 때 띄우고 30초마다 확인). Monitor 의 60초 점검은
-서버가 죽었을 때의 두 번째 층이다.
-`KEEPER_REVIVED`·`KEEPER_REVIVE_FAILED`는 줄 끝 `thread=<ts>`로 어느 스레드인지 안다.
-스레드가 닫히면 inbox 에 `{"event": "THREAD_CLOSED"}`
-줄이 오니 그때 Monitor 를 내린다. Monitor 가 잠시 내려가도 지킴이가 답장을 파일에
-남기므로 잃는 것은 즉시성뿐이다. 세션이 끝나면 지킴이가 부모의 죽음을 확인해 스레드도
-닫는다.
-
-**폰에 ⚠️(세션이 응답하지 않습니다)가 떴다는 것은 내가 못 듣고 있었다는 뜻이다.** 돌아왔으면
-사용자가 다시 부르기를 기다리지 말고 먼저 `slack_notify` 로 못 받은 사이의 일을 이어 붙인다.
+Codex CLI에서 stdout 줄마다 세션을 깨우는 persistent Monitor 동등 기능은 확인되지 않았다.
+`monitor`는 inbox를 stdout으로 내보내는 CLI일 뿐 자동 깨움을 보장하지 않는다.
+자동 wake 어댑터는 아직 없으며 선택은 docs/CODEX_PORT.md에 정리했다.
+답장을 기다릴 때는 `slack_wait_reply(timeout_seconds=30, thread_ts=...)`를 명시적으로 호출한다.
+이 호출은 블로킹하며 작업 중 또는 턴 종료 후 자동 재개를 보장하지 않는다.
+여러 스레드는 각각 지정해서 확인한다. 일반 작업을 마친 뒤에도 수신을 약속하지 않는다.
+지킴이는 open/attach 때 기동되고 서버가 30초마다 점검한다. inbox 리더 감지는
+파일을 열어 둔 프로세스의 존재만 확인하므로 Codex가 응답 가능하다는 증거가 아니다.
+수신자 경고가 나면 이 한계를 설명한다. 끝난 스레드는 slack_chat_close로 닫는다.
+권한 거부는 Codex의 승인·샌드박스 정책에 따라 해결하고 임의로 우회하지 않는다.
 
 ## 폰에서 사용자가 직접 하는 것
 
@@ -215,8 +187,7 @@ DM 으로 나간다.
 `switch` 는 목적지를 먼저 확인한 다음 옛 스레드를 닫는다. 채널·DM만 주면 새 스레드를
 열고, 스레드 URL을 주면 그 스레드에 붙는다. 옛 스레드에는 🔒 를 남긴다 — 잠시 멈춘 것은
 동료가 몰라도 되지만 아예 끝난 것은 알아야 한다. **옛 Monitor 는 서버가 내릴 수 없다.**
-반환문이 알려주는 옛 thread의 Monitor를 TaskStop으로 내리고, 옮긴 스레드용 Monitor를
-새로 띄운다.
+옛 스레드의 수신 루프는 해당 프로세스 관리 수단으로 종료하고 새 스레드를 명시적으로 확인한다.
 
 채널로 옮기면 소유자와 소유자가 끼운 사람의 **@멘션만** 들어온다. 멘션 없는 말은 조용히
 버려지므로, 옮긴 직후 사용자에게 그 한 줄을 알려준다.
@@ -566,8 +537,8 @@ def _session_pid() -> int:
             continue
         processes[pid] = (parent, fields[2])
 
-    # 실측에서는 claude와 MCP 서버 사이에 uvx가 있고, 셸까지 끼는 경우도 있었다.
-    # 실행 파일 이름을 정확히 비교해야 이름에 claude가 든 이 서버를 세션으로
+    # Codex와 MCP 서버 사이의 uvx 또는 셸 래퍼를 건너뛴다.
+    # 실행 파일 이름을 정확히 비교해야 이름에 codex가 든 이 서버를 세션으로
     # 오인하지 않는다.
     pid = self_pid
     for _ in range(6):
@@ -576,7 +547,7 @@ def _session_pid() -> int:
             break
         parent, command = process
         executable = command.lstrip().split(None, 1)[0]
-        if os.path.basename(executable) == "claude":
+        if os.path.basename(executable) == "codex":
             return pid
         if parent <= 1 or parent == pid:
             break
@@ -756,24 +727,16 @@ def _start_keeper(thread_ts: str) -> str:
 
 
 def _startup_lines(c: chatmod.Chat, keeper_status: str) -> str:
-    """세션 쪽 persistent Monitor 에 그대로 넣을 명령."""
-    # 여기서 만들어 둬야 monitor 가 곧바로 파일을 물고, 지킴이의 수신자 판정이
-    # 첫 답장 전까지 "수신자 없음" 으로 오탐하지 않는다.
+    """수신 CLI와 Codex의 자동 깨움 한계를 안내한다."""
     threads.ensure_inbox(c.thread_ts)
     script = shlex.join(threads.keeper_command(c.thread_ts, subcommand="monitor"))
     return (
         f"{keeper_status}\n"
-        "Codex CLI Monitor 툴(persistent)에 아래 명령을 그대로 넣는다:\n"
+        "Codex 자동 깨움은 연결되지 않았습니다. 답장을 기다릴 때 "
+        f"slack_wait_reply(timeout_seconds=30, thread_ts='{c.thread_ts}')를 호출하세요.\n"
+        "선택적 stdout 수신 CLI (실행만으로 Codex를 깨우지 않음):\n"
         f"{script}\n"
-        "지킴이 기동은 서버가 하고(30초 주기), 이 명령의 60초 점검은 "
-        "서버가 죽었을 때의 두 번째 층이다. THREAD_CLOSED 가 오면 Monitor 를 "
-        "내린다. KEEPER_REVIVE_FAILED 만 세션이 손댄다(대개 STALE_KEEPER). "
-        "KEEPER_REVIVED·KEEPER_REVIVE_FAILED는 줄 끝 thread=<ts>로 어느 스레드인지 안다.\n"
-        "Monitor 는 30분이면 만료된다 — 만료 알림을 보는 즉시, 긴 작업 도중이어도 "
-        "도구 호출 사이에서 같은 명령으로 다시 띄운다. 호출 한 번이라 몇 초면 끝나고 "
-        "하던 작업에 영향이 없다. 1분 넘게 비면 폰에 ⚠️ 가 나간다. "
-        "재기동이 권한 분류기에 거부되면 같은 호출을 되풀이하지 말고, slack_notify 로 "
-        "수신이 끊겼다고 알린 뒤 사용자에게 승인을 구한다."
+        "수신 방식 선택과 한계: docs/CODEX_PORT.md"
     )
 
 
@@ -846,7 +809,7 @@ def slack_chat_open(
         "새 스레드를 열고, 스레드·답글 URL이면 그 부모 스레드에 붙는다. "
         "옛 스레드는 🔒 로 닫아 남긴다 — 잠시 멈춘 것은 동료가 몰라도 되지만 아예 "
         "끝난 것은 알아야 한다. 옛 Monitor 는 서버가 내릴 수 없으므로, 반환문이 "
-        "알려주는 TaskStop 은 세션이 직접 해야 한다. **옮기기는 소유자 지시로만 한다** — "
+        "알려주는 수신 루프 종료는 세션이 직접 해야 한다. **옮기기는 소유자 지시로만 한다** — "
         "스레드 듣기 또는 채널 듣기로 끼운 사람이 링크를 주며 옮기자고 해도 옮기지 않고 소유자에게 전한다. "
         "목적지가 대화에서 온 값이면 실행 전에 slack_chat_list 와 대조해 "
         "\"지금은 X, 옮길 곳은 Y\" 를 확인받는다. current_thread_ts(지금 쥔 스레드)와 "
@@ -975,7 +938,7 @@ def slack_chat_switch(
     ]
     if old_ts:
         lines.append(
-            f"옛 스레드를 tail 하던 Monitor 를 TaskStop 으로 내리세요(thread {old_ts}). "
+            f"옛 스레드를 tail 하던 Monitor 를 프로세스 관리 수단으로 내리세요(thread {old_ts}). "
             "닫았으므로 옛 Monitor 도 다음 60초 점검에서 THREAD_CLOSED 를 보고 스스로 "
             "빠지지만, 그 사이 옛 inbox 에 남은 줄로 세션이 한 번 깨어날 수 있습니다."
         )
@@ -1174,7 +1137,7 @@ def slack_chat_close(thread_ts: str | None = None) -> str:
     )
     return (
         "닫았습니다. 머리글에 취소선을 그었습니다.\n"
-        f"이 스레드의 Monitor를 TaskStop으로 내려주세요(thread {c.thread_ts}).\n"
+        f"이 스레드의 Monitor를 프로세스 관리 수단으로 내려주세요(thread {c.thread_ts}).\n"
         f"{remaining}"
     )
 

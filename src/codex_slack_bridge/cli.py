@@ -1,6 +1,6 @@
 """명령줄 진입점.
 
-인자 없이 실행하면 MCP 서버로 동작한다. `claude mcp add` 가 그렇게 부른다.
+인자 없이 실행하면 MCP 서버로 동작한다. `codex mcp add` 가 그렇게 부른다.
 사람이 직접 부르는 것은 `init`, `manifest`, `doctor` 셋이다.
 
 `init` 은 안내까지 한다. uvx 로 설치한 사람에게는 레포가 없어서 문서 파일을
@@ -196,35 +196,14 @@ TOKEN_HELP = """\
 
 
 def permission_warning() -> str:
-    """설치 마지막에 권한 세 줄을 경고한다.
-
-    권한 분류기가 있는 하네스(Codex CLI auto mode 등)에서는 이 서버의 툴이
-    세션↔스레드 바인딩을 홈에 영구 기록한다는 이유로 막히고, 지킴이를 띄우는
-    `keeper-start` 도 데몬 기동이라 같은 판정을 받는다. **그 권한은 모델이
-    스스로 넣을 수 없다** — 권한 파일 수정은 자기수정으로 다시 막힌다.
-
-    그래서 이 경고가 설치 시점에 있어야 한다. 미리 넣어두지 않으면 반드시 한 번
-    멈추고, 멈추는 시점이 하필 세션이 죽어 스레드로 돌아가려는 순간이다
-    (2026-09-16, docs/handoff-2026-09-16-attach-friction.md). 그때는 폰 스레드에
-    경고가 쌓이는 중이라 손댈 여유가 가장 없다.
-    """
-    return "\n".join([
-        _red("━━ 권한 · 하네스를 쓰면 반드시 먼저 넣을 것 ━━"),
-        "",
-        "  Codex CLI auto mode 처럼 권한 분류기가 있는 환경에서는 이 서버의 툴과",
-        "  지킴이 기동이 '허가 없는 영속화' 로 분류돼 막힙니다.",
-        _red("  모델은 이 권한을 스스로 추가할 수 없습니다 — 설치할 때 사람이 한 번 넣어야 합니다."),
-        "",
-        "  settings.json 의 permissions.allow 에 세 줄:",
-        "",
-        '      "mcp__codex-slack-bridge",',
-        '      "Bash(*codex-slack-bridge keeper-start*)",',
-        '      "Bash(*codex-slack-bridge monitor --thread *)"',
-        "",
-        "  분류기가 없는 환경(권한을 직접 승인하는 설정)이면 지금은 넘어가도 됩니다.",
-        "  막히는 증상은 attach 나 Monitor 등록이 거부되는 것으로 나타납니다.",
-        "",
-    ])
+    """Codex 설정과 승인 정책을 안내한다."""
+    return (
+        "Codex MCP 설정: ~/.codex/config.toml의 [mcp_servers.codex-slack-bridge]\n"
+        "command = \"uvx\"\n"
+        'args = ["--from", "git+https://github.com/Mustang1234/codex-slack-bridge", "codex-slack-bridge"]\n'
+        "권한은 Codex의 승인·샌드박스 정책을 따릅니다. 자동으로 권한을 변경하지 않습니다.\n"
+        "stdout monitor는 자동 깨움이 아닙니다. docs/CODEX_PORT.md를 확인하세요.\n"
+    )
 
 
 def cmd_manifest(argv: list[str]) -> None:
@@ -343,7 +322,7 @@ def cmd_init(argv: list[str]) -> None:
     print("테스트 메시지를 보냈습니다. 폰에서 확인해 보세요.")
     print(f"설정 저장: {path} (권한 600)\n")
     print("━━ 마지막 · Codex CLI 에 붙이기 ━━\n")
-    print("  claude mcp add codex-slack-bridge -s user -- uvx codex-slack-bridge\n")
+    print("  codex mcp add codex-slack-bridge -- uvx codex-slack-bridge\n")
     print(permission_warning())
 
 
@@ -1086,13 +1065,9 @@ def _monitor_keeper_line(thread: str) -> str | None:
 
 
 def cmd_monitor(argv: list[str]) -> None:
-    """Codex CLI Monitor 툴에 넣는 수신 루프. inbox 새 줄을 그대로 흘리고 지킴이를 점검한다.
+    """inbox 새 줄을 stdout으로 흘리고 지킴이를 점검한다.
 
-    예전에는 open/attach 가 tail·trap·while·case 를 엮은 셸 스크립트를 돌려줬다.
-    권한 규칙은 복합 명령의 조각마다 맞아야 하므로 그 스크립트는 허용 규칙 한 줄로
-    덮을 수 없었고, auto mode 에서는 매 재기동이 분류기 판정에 걸렸다 — 대부분
-    통과했지만 가끔 거부돼 수신이 끊겼다(2026-10-09). 명령 하나로 만들면
-    `Bash(*codex-slack-bridge monitor --thread *)` 로 분류기를 거치지 않는다.
+    Codex의 자동 깨움 어댑터는 포함하지 않는다.
 
     tail 을 자식으로 띄우지 않고 직접 읽는다. 자식을 두면 이 프로세스가 SIGKILL 로
     죽을 때 고아 tail 이 inbox 를 계속 열어 두고, 수신자 판정(inbox_tailed)이 죽은
@@ -1218,22 +1193,20 @@ def cmd_doctor(argv: list[str]) -> None:
 USAGE = """\
 codex-slack-bridge — Codex CLI 세션과 Slack 을 잇는 MCP 서버
 
-  codex-slack-bridge            MCP 서버로 동작 (claude mcp add 가 이렇게 부른다)
+  codex-slack-bridge            MCP 서버로 동작 (codex mcp add 가 이렇게 부른다)
   codex-slack-bridge init       설정 생성 — 준비가 안 됐으면 절차를 안내한다
   codex-slack-bridge manifest   Slack 콘솔에 붙여넣을 앱 매니페스트를 출력한다
                                  --name "이름" 으로 봇 이름을 바꿀 수 있다
   codex-slack-bridge token-help  Bot User OAuth Token 받는 법을 출력한다
   codex-slack-bridge watch --thread <ts>
                                  답글이 오면 종료한다. 백그라운드로 띄우면
-                                 그 종료가 곧 깨움 신호가 된다. Codex CLI 세션은
-                                 보통 Monitor 로 inbox 를 tail 하므로 필요 없으며,
-                                 tmux·Codex 밖 환경을 위한 폴백이다
+                                 종료 상태를 외부 소비자가 확인해야 한다. 자동 깨움은 미연결이다
   codex-slack-bridge keeper-start --thread <ts>
                                  지킴이를 수동 기동·진단한다. 보통은 MCP 서버가
                                  자동으로 띄우고 되살린다
   codex-slack-bridge monitor --thread <ts>
                                  inbox 새 줄을 흘리고 60초마다 지킴이를 점검한다.
-                                 open/attach 가 돌려주는 Codex CLI Monitor 명령이다
+                                 stdout 출력만 제공하며 Codex 자동 깨움은 미연결이다
   codex-slack-bridge targets    설정한 기본 목적지와 초대된 채널을 본다
   codex-slack-bridge doctor     현재 설정이 살아있는지 점검한다
 """
