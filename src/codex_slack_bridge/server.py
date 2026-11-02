@@ -209,7 +209,7 @@ server = MCPServer(
 
 SETUP_HINT = (
     "Slack 설정이 없어 알림을 건너뜁니다. "
-    "`uvx codex-slack-bridge init` 으로 한 번만 설정하면 됩니다."
+    "`uvx --from git+https://github.com/Mustang1234/codex-slack-bridge codex-slack-bridge init` 으로 한 번만 설정하면 됩니다."
 )
 
 

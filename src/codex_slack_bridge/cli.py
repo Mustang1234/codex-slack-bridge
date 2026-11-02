@@ -322,7 +322,7 @@ def cmd_init(argv: list[str]) -> None:
     print("테스트 메시지를 보냈습니다. 폰에서 확인해 보세요.")
     print(f"설정 저장: {path} (권한 600)\n")
     print("━━ 마지막 · Codex CLI 에 붙이기 ━━\n")
-    print("  codex mcp add codex-slack-bridge -- uvx codex-slack-bridge\n")
+    print("  codex mcp add codex-slack-bridge -- uvx --from git+https://github.com/Mustang1234/codex-slack-bridge codex-slack-bridge\n")
     print(permission_warning())
 
 
