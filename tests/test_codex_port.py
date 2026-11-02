@@ -1,5 +1,6 @@
 import subprocess
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from codex_slack_bridge import config, server, threads
@@ -40,4 +41,19 @@ class CodexPortTests(unittest.TestCase):
     def test_state_and_command_namespace(self):
         self.assertEqual(config.CONFIG_DIR.name, '.codex-slack-bridge')
         self.assertEqual(threads.THREADS_DIR.parent.name, '.codex-slack-bridge')
-        self.assertIn('codex', ' '.join(threads.keeper_command('123.4')))
+        for has_console_script in (True, False):
+            with self.subTest(has_console_script=has_console_script), patch.object(
+                Path, 'is_file', return_value=has_console_script
+            ):
+                command = threads.keeper_command('123.4')
+                if has_console_script:
+                    self.assertEqual(Path(command[0]).name, 'codex-slack-bridge')
+                    self.assertEqual(command[1:], ['keeper', '--thread', '123.4'])
+                else:
+                    self.assertEqual(command[1:], [
+                        '-m', 'codex_slack_bridge', 'keeper', '--thread', '123.4'
+                    ])
+                for token in command:
+                    self.assertNotIn(Path(token).name, {
+                        'claude-slack-bridge', 'claude_slack_bridge'
+                    })
