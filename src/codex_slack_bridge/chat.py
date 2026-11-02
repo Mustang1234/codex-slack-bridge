@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 from . import slack
 from . import threads
+from . import config as cfg
 
 POLL_INTERVAL = 5.0       # Slack 레이트리밋은 넉넉하다. ntfy 의 25초를 따를 이유가 없다.
 WARN_LEAD = 10 * 60       # 마감 10분 전 예고
@@ -599,7 +600,8 @@ def poll_new(token: str, chat: Chat) -> list[dict]:
     return fresh
 
 
-def wait_reply(token: str, bot_user_id: str, timeout: float, thread_ts: str | None = None) -> tuple[str, list[dict]]:
+def wait_reply(token: str, bot_user_id: str, timeout: float, thread_ts: str | None = None,
+               after_ts: float = 0, owner_id: str = "") -> tuple[str, list[dict]]:
     """답장이 올 때까지 블로킹한다.
 
     반환하는 상태는 셋이다.
@@ -620,6 +622,9 @@ def wait_reply(token: str, bot_user_id: str, timeout: float, thread_ts: str | No
             chat.deadline = float(state["deadline"])
             chat.warned = bool(state.get("warned"))
 
+        if state.get("closed"):
+            return "closed", []
+
         if chat.remaining <= 0:
             close_chat(token, "마감 시각 도달", resumable=True, thread_ts=chat.thread_ts)
             return "closed", []
@@ -636,7 +641,13 @@ def wait_reply(token: str, bot_user_id: str, timeout: float, thread_ts: str | No
             threads.patch(chat.thread_ts, warned=True)
 
         try:
-            fresh = [m for m in poll_new(token, chat) if is_human(m, bot_user_id)]
+            listeners = list(set(state.get("listeners", [])) |
+                             set(cfg.channel_listeners(chat.channel)))
+            fresh = [m for m in poll_new(token, chat)
+                     if float(m.get("ts", 0)) > after_ts
+                     and is_for_me(m, bot_user_id, owner_id,
+                                   bool(state.get("require_mention")), listeners)
+                     and not parse_command(strip_mention(m.get("text", ""), bot_user_id))]
             fails = 0
         except slack.SlackError:
             # 단발 실패는 넘어간다. 커서를 그대로 두고 다음 주기에 다시 긁으므로

@@ -30,6 +30,8 @@ class Config:
     icon_emoji: str = ""    # 발신자 아이콘 — ":robot_face:" 꼴. icon_url 보다 우선.
     icon_url: str = ""      # 발신자 아이콘 이미지 URL(https). 비면 앱 아이콘.
 
+    wake_enabled: bool = True
+
     @property
     def masked_token(self) -> str:
         """로그·화면 출력용. 토큰 전체는 어디에도 찍지 않는다."""
@@ -80,6 +82,7 @@ def load() -> Config | None:
         display_name=display_name,
         icon_emoji=icon_emoji,
         icon_url=icon_url,
+        wake_enabled=str(os.environ.get("CODEX_SLACK_BRIDGE_WAKE_ENABLED", raw.get("wake_enabled", True))).lower() in ("1", "true", "yes", "on"),
     )
 
 

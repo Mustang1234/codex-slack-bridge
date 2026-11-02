@@ -23,6 +23,7 @@ from . import chat
 from . import config as cfg
 from . import slack
 from . import threads
+from . import wake
 
 MANIFEST_NAME = "slack-app-manifest.yaml"
 
@@ -202,7 +203,7 @@ def permission_warning() -> str:
         "command = \"uvx\"\n"
         'args = ["--from", "git+https://github.com/Mustang1234/codex-slack-bridge", "codex-slack-bridge"]\n'
         "권한은 Codex의 승인·샌드박스 정책을 따릅니다. 자동으로 권한을 변경하지 않습니다.\n"
-        "stdout monitor는 자동 깨움이 아닙니다. docs/CODEX_PORT.md를 확인하세요.\n"
+        "자동 깨움에는 확인된 Codex 세션 UUID 매핑이 필요합니다. docs/CODEX_PORT.md를 확인하세요.\n"
     )
 
 
@@ -785,6 +786,9 @@ def cmd_keeper(argv: list[str]) -> None:
                 # 지원 앱도 그때까지 답이 없으면 지킴이가 대신 답하고 표시를 내린다.
                 pending.append(message_ts)
 
+            # Inbox append/fsync precedes delivery. Also retry backlog after a restart.
+            wake.tick(thread)
+
             # 유예가 지난 것 중 아직 답이 안 붙은 것만 알린다.
             still = []
             expired_unanswered = []
@@ -920,7 +924,9 @@ def _check_session_health(
 
     state = threads.load(thread) or {}
     reason = ""
-    if not threads.session_listening(thread):
+    if state.get("wake_failed"):
+        reason = "Codex 자동 깨움 실패: " + str(state.get("wake_error") or "queue 실패")
+    elif not (wake.available(state) or float(state.get("wake_wait_until") or 0) > now or threads.session_listening(thread)):
         reason = "수신자(Monitor)가 붙어 있지 않습니다"
     else:
         # 지킴이 명령(`핑`·`연장`·`닫기`·listener 관리)은 세션을
@@ -1200,13 +1206,13 @@ codex-slack-bridge — Codex CLI 세션과 Slack 을 잇는 MCP 서버
   codex-slack-bridge token-help  Bot User OAuth Token 받는 법을 출력한다
   codex-slack-bridge watch --thread <ts>
                                  답글이 오면 종료한다. 백그라운드로 띄우면
-                                 종료 상태를 외부 소비자가 확인해야 한다. 자동 깨움은 미연결이다
+                                 종료 상태를 외부 소비자가 확인해야 한다. watch 자체는 Codex를 깨우지 않는다
   codex-slack-bridge keeper-start --thread <ts>
                                  지킴이를 수동 기동·진단한다. 보통은 MCP 서버가
                                  자동으로 띄우고 되살린다
   codex-slack-bridge monitor --thread <ts>
                                  inbox 새 줄을 흘리고 60초마다 지킴이를 점검한다.
-                                 stdout 출력만 제공하며 Codex 자동 깨움은 미연결이다
+                                 stdout 출력만 제공한다. 자동 깨움은 keeper의 queue 경로다
   codex-slack-bridge targets    설정한 기본 목적지와 초대된 채널을 본다
   codex-slack-bridge doctor     현재 설정이 살아있는지 점검한다
 """

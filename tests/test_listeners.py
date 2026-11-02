@@ -1,4 +1,6 @@
 import tempfile
+import json
+import subprocess
 import time
 import unittest
 from pathlib import Path
@@ -222,6 +224,8 @@ class ListenerTests(unittest.TestCase):
     def test_keeper_uses_union_and_scoped_parser(self):
         # Two polls: owner grants access, then the next poll admits the new listener.
         cfg.save_channel_listeners("CCHAN", ["UB"])
+        target = "11111111-1111-4111-8111-111111111111"
+        cli.wake.bind("100.0", target, True)
         messages = [
             [{"ts": "101.0", "user": "UOWNER", "text": "<@UBOT> 듣기 <@UA>"}],
             [{"ts": "102.0", "user": "UA", "text": "<@UBOT> local"},
@@ -241,9 +245,18 @@ class ListenerTests(unittest.TestCase):
              patch.object(slack, "conversations_replies", side_effect=messages) as replies, \
              patch.object(cli, "_check_session_health") as health, \
              patch.object(cli.time, "sleep", side_effect=sleep), \
+             patch.object(cli.wake.shutil, "which", return_value="/mock/codex"), \
+             patch.object(cli.wake.subprocess, "run", return_value=subprocess.CompletedProcess(
+                 [], 0, f"Queued message receipt for thread {target}.", ""
+             )) as queue, \
              patch.object(cli, "_log"):
             cli.cmd_keeper(["--thread", "100.0"])
         self.assertEqual([m["user"] for m in threads.read_inbox("100.0", 0)], ["UA", "UB"])
+        queue.assert_called_once()
+        data = json.loads(queue.call_args.args[0][5].split("\n", 1)[1])
+        self.assertEqual(data["sender"], "UA")
+        self.assertEqual(data["ts"], "102.0")
+        self.assertEqual(threads.load("100.0")["wake_last_queued_ts"], "102.0")
         self.assertEqual(cfg.channel_listeners("CCHAN"), ["UB"])
         self.assertEqual(set(health.call_args.args[-2]), {"UA", "UB"})
         for call in replies.call_args_list:

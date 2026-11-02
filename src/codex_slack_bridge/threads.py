@@ -33,8 +33,8 @@ THREADS_DIR = Path(
     os.environ.get("CODEX_SLACK_BRIDGE_THREADS_DIR")
     or os.path.expanduser("~/.codex-slack-bridge/threads")
 )
-KEEPER_PROTOCOL = "inbox-v1"
-SIDECAR_SUFFIXES = (".inbox.jsonl", ".lock", ".keeper.log")
+KEEPER_PROTOCOL = "inbox-queue-v2"
+SIDECAR_SUFFIXES = (".inbox.jsonl", ".lock", ".keeper.log", ".delivery.lock")
 
 
 def _path(thread_ts: str) -> Path:
@@ -58,6 +58,8 @@ def save(thread_ts: str, data: dict) -> Path:
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=2)
         fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(tmp, path)
     return path
 
