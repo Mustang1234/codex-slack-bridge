@@ -1,7 +1,7 @@
 """폰과의 양방향 대화.
 
 ntfy 시절에는 프로세스가 둘이었다. 채널을 붙들고 받아 적는 보유자와, 새 줄이
-생기면 종료해서 Claude 를 깨우는 감시자. 브로커에 이력이 없어 누군가는 계속
+생기면 종료 신호를 외부 소비자에게 주는 감시자. 브로커에 이력이 없어 누군가는 계속
 받아 적고 있어야 했기 때문이다.
 
 Slack 에는 이력이 남는다. 그래서 받아 적는 쪽이 통째로 사라지고, 깨우는 쪽만
@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 
 from . import slack
 from . import threads
+from . import config as cfg
+from . import wake
 
 POLL_INTERVAL = 5.0       # Slack 레이트리밋은 넉넉하다. ntfy 의 25초를 따를 이유가 없다.
 WARN_LEAD = 10 * 60       # 마감 10분 전 예고
@@ -45,7 +47,7 @@ CLOSE_NOTICE_GRACE = 30 * 60
 # 돌아오는 것까지 막는 문이 아니다 — 막았더니 상태 파일을 손으로 고쳐 돌아왔다
 # (2026-09-17). 새 기록은 close_thread 가 resumable 로 남기므로, 이 목록은 그
 # 필드가 생기기 전에 닫힌 기록을 읽을 때만 쓴다.
-_RESUMABLE_REASONS = ("Claude 세션 종료", "대화를 다른 곳으로 옮겼습니다", "마감 시각 도달")
+_RESUMABLE_REASONS = ("Codex 세션 종료", "대화를 다른 곳으로 옮겼습니다", "마감 시각 도달")
 
 
 def resumable(state: dict) -> bool:
@@ -119,7 +121,7 @@ def attach(
             pass
 
     requested_label = label
-    label = label or state.get("label") or "Claude 세션"
+    label = label or state.get("label") or "Codex 세션"
     label_changed = bool(requested_label) and label != state.get("label")
     if hours is not None:
         deadline = time.time() + hours * 3600
@@ -387,7 +389,7 @@ def open_chat(token: str, channel: str, hours: float, label: str | None) -> Chat
     세션은 스레드를 여러 개 쥘 수 있다. 스레드는
     개수 제한이 없으므로 미리 만들어 둘 것도 반납할 것도 없다.
     """
-    head = label or "Claude 세션"
+    head = label or "Codex 세션"
     deadline = time.time() + hours * 3600
     res = slack.post_message(token, channel, header_text(head, deadline))
 
@@ -426,7 +428,7 @@ def extend(token: str, hours: float, thread_ts: str | None = None) -> Chat:
     try:
         slack.chat_update(
             token, chat.channel, chat.thread_ts,
-            header_text(chat.label or "Claude 세션", chat.deadline),
+            header_text(chat.label or "Codex 세션", chat.deadline),
         )
     except slack.SlackError:
         # 머리글 갱신에 실패해도 마감 자체는 늘어난 상태다. 표시가 어긋나는 것과
@@ -436,6 +438,17 @@ def extend(token: str, hours: float, thread_ts: str | None = None) -> Chat:
 
 
 def close_thread(
+    token: str, channel: str, thread_ts: str, label: str, reason: str,
+    resumable: bool = False, only_if_notified: bool = False,
+) -> bool:
+    try:
+        return _close_thread(token, channel, thread_ts, label, reason,
+                             resumable, only_if_notified)
+    except wake.DeliveryBusy:
+        return False  # No side effect: the reservation precedes all close work.
+
+
+def _close_thread(
     token: str, channel: str, thread_ts: str, label: str, reason: str,
     resumable: bool = False, only_if_notified: bool = False,
 ) -> bool:
@@ -452,43 +465,44 @@ def close_thread(
     각 단계의 성공을 저장하므로 재시도는 아직 성공하지 않은 단계만 수행한다.
     부르는 쪽이 다음 주기에 다시 시도할 수 있을 때(지킴이의 마감 처리) 쓴다.
     """
-    stamp = time.strftime("%H:%M")
-    state = threads.load(thread_ts) or {}
-    header_done = state.get("header_editable") is False or bool(state.get("close_header_updated"))
-    notice_done = bool(state.get("close_notice_posted"))
-    if not header_done:
-        try:
-            slack.chat_update(
-                token, channel, thread_ts,
-                f"~*{strikeable(label)}* — 종료됨 ({stamp})~\n_{reason}_",
-            )
-        except slack.SlackError:
-            pass
-        else:
-            threads.patch(thread_ts, close_header_updated=True)
-            header_done = True
-    if not notice_done:
-        try:
-            slack.post_message(
-                token, channel,
-                f"{CLOSE_MARK} — {reason} ({stamp})\n이 스레드에 답글을 달아도 이제 읽지 않습니다.",
-                thread_ts=thread_ts,
-            )
-        except slack.SlackError:
-            pass
-        else:
-            # 각 성공을 즉시 남겨 다른 단계가 실패해도 다음 주기에 반복하지 않는다.
-            threads.patch(thread_ts, close_notice_posted=True)
-            notice_done = True
-    notified = header_done and notice_done
-    if only_if_notified and not notified:
-        return False
-    slack.set_session_status(token, channel, thread_ts, "closed")
-    threads.patch(
-        thread_ts, closed=True, closed_at=time.time(), reason=reason, resumable=resumable,
-        listeners=[],
-    )
-    return notified
+    with wake.transaction([thread_ts]):
+        stamp = time.strftime("%H:%M")
+        state = threads.load(thread_ts) or {}
+        header_done = state.get("header_editable") is False or bool(state.get("close_header_updated"))
+        notice_done = bool(state.get("close_notice_posted"))
+        if not header_done:
+            try:
+                slack.chat_update(
+                    token, channel, thread_ts,
+                    f"~*{strikeable(label)}* — 종료됨 ({stamp})~\n_{reason}_",
+                )
+            except slack.SlackError:
+                pass
+            else:
+                threads.patch(thread_ts, close_header_updated=True)
+                header_done = True
+        if not notice_done:
+            try:
+                slack.post_message(
+                    token, channel,
+                    f"{CLOSE_MARK} — {reason} ({stamp})\n이 스레드에 답글을 달아도 이제 읽지 않습니다.",
+                    thread_ts=thread_ts,
+                )
+            except slack.SlackError:
+                pass
+            else:
+                # 각 성공을 즉시 남겨 다른 단계가 실패해도 다음 주기에 반복하지 않는다.
+                threads.patch(thread_ts, close_notice_posted=True)
+                notice_done = True
+        notified = header_done and notice_done
+        if only_if_notified and not notified:
+            return False
+        slack.set_session_status(token, channel, thread_ts, "closed")
+        wake.close_delivery(
+            thread_ts, closed=True, closed_at=time.time(), reason=reason, resumable=resumable,
+            listeners=[],
+        )
+        return notified
 
 
 def close_chat(
@@ -500,9 +514,11 @@ def close_chat(
         return
     chat = current(thread_ts)
     close_thread(
-        token, chat.channel, chat.thread_ts, chat.label or "Claude 세션", reason,
+        token, chat.channel, chat.thread_ts, chat.label or "Codex 세션", reason,
         resumable=resumable,
     )
+    if not (threads.load(chat.thread_ts) or {}).get("closed"):
+        raise wake.DeliveryBusy("수신 처리 중입니다. 닫기를 다시 시도하세요.")
     forget(chat.thread_ts)
 
 
@@ -599,7 +615,9 @@ def poll_new(token: str, chat: Chat) -> list[dict]:
     return fresh
 
 
-def wait_reply(token: str, bot_user_id: str, timeout: float, thread_ts: str | None = None) -> tuple[str, list[dict]]:
+def wait_reply(token: str, bot_user_id: str, timeout: float, thread_ts: str | None = None,
+               after_ts: float = 0, owner_id: str = "",
+               wait_lease: str = "", conf: cfg.Config | None = None) -> tuple[str, list[dict]]:
     """답장이 올 때까지 블로킹한다.
 
     반환하는 상태는 셋이다.
@@ -609,6 +627,7 @@ def wait_reply(token: str, bot_user_id: str, timeout: float, thread_ts: str | No
     """
     chat = current(thread_ts)
     until = time.time() + timeout
+    conf = conf or cfg.Config(token, chat.channel, owner_id)
     fails = 0
 
     while True:
@@ -619,6 +638,9 @@ def wait_reply(token: str, bot_user_id: str, timeout: float, thread_ts: str | No
         if state.get("deadline"):
             chat.deadline = float(state["deadline"])
             chat.warned = bool(state.get("warned"))
+
+        if state.get("closed"):
+            return "closed", []
 
         if chat.remaining <= 0:
             close_chat(token, "마감 시각 도달", resumable=True, thread_ts=chat.thread_ts)
@@ -635,20 +657,25 @@ def wait_reply(token: str, bot_user_id: str, timeout: float, thread_ts: str | No
             chat.warned = True
             threads.patch(chat.thread_ts, warned=True)
 
+        poll_error = None
         try:
-            fresh = [m for m in poll_new(token, chat) if is_human(m, bot_user_id)]
+            listeners = list(set(state.get("listeners", [])) |
+                             set(cfg.channel_listeners(chat.channel)))
+            # Polling is intake only. Delivery always comes from the durable inbox.
+            for message in slack.conversations_replies(token, chat.channel, chat.thread_ts):
+                if (str(message.get("ts")) != chat.thread_ts
+                        and wake.ts(message.get("ts")) > wake.ts(state.get("last_seen_ts"))
+                        and is_for_me(message, bot_user_id, conf.owner_id,
+                                      bool(state.get("require_mention")), listeners)
+                        and not parse_command(strip_mention(message.get("text", ""), bot_user_id))):
+                    threads.append_inbox(chat.thread_ts, message, describe(message))
             fails = 0
-        except slack.SlackError:
-            # 단발 실패는 넘어간다. 커서를 그대로 두고 다음 주기에 다시 긁으므로
-            # 유실이 아니라 지연이 된다.
-            #
-            # 다만 계속 실패하면 조용히 삼키지 않는다. 그러면 "답장 없음" 과
-            # 구분이 안 되어, 사용자는 답을 보냈는데 기다리는 쪽은 아무 일도
-            # 없다고 믿는 상태가 된다. 실제로 그렇게 새고 있었다.
+        except slack.SlackError as error:
             fails += 1
-            if fails >= 3:
-                raise
-            fresh = []
+            poll_error = error
+        fresh = wake.consume_wait(chat.thread_ts, conf, bot_user_id, wait_lease)
+        if not fresh and poll_error and fails >= 3:
+            raise poll_error
 
         if fresh:
             if chat.warned:

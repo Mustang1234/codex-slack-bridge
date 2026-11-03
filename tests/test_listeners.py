@@ -1,10 +1,12 @@
 import tempfile
+import json
+import subprocess
 import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from claude_slack_bridge import chat, cli, config as cfg, server, slack, threads
+from codex_slack_bridge import chat, cli, config as cfg, server, slack, threads
 
 
 class ParserTests(unittest.TestCase):
@@ -176,10 +178,10 @@ class ListenerTests(unittest.TestCase):
             listing = server.slack_chat_list()
         self.assertEqual(listing.splitlines(), [
             "표시: ** 기본 스레드, * 이 세션이 쥔 스레드",
-            "100.0  마감 12:00  지킴이없음    스레드 listeners=UA,UB  채널 전체 listeners=UC",
-            "200.0  마감 12:00  지킴이없음  Missing  스레드 listeners=0  채널 전체 listeners=UC",
-            "300.0  마감 12:00  지킴이없음  Empty  스레드 listeners=0  채널 전체 listeners=0",
-            "400.0  마감 12:00  지킴이없음  DM",
+            "100.0  마감 12:00  지킴이없음    스레드 listeners=UA,UB  채널 전체 listeners=UC  wake=off; 마지막 오류=-",
+            "200.0  마감 12:00  지킴이없음  Missing  스레드 listeners=0  채널 전체 listeners=UC  wake=off; 마지막 오류=-",
+            "300.0  마감 12:00  지킴이없음  Empty  스레드 listeners=0  채널 전체 listeners=0  wake=off; 마지막 오류=-",
+            "400.0  마감 12:00  지킴이없음  DM  wake=off; 마지막 오류=-",
         ])
 
     def test_owner_gate_and_dm(self):
@@ -222,6 +224,8 @@ class ListenerTests(unittest.TestCase):
     def test_keeper_uses_union_and_scoped_parser(self):
         # Two polls: owner grants access, then the next poll admits the new listener.
         cfg.save_channel_listeners("CCHAN", ["UB"])
+        target = "11111111-1111-4111-8111-111111111111"
+        cli.wake.bind("100.0", target, True)
         messages = [
             [{"ts": "101.0", "user": "UOWNER", "text": "<@UBOT> 듣기 <@UA>"}],
             [{"ts": "102.0", "user": "UA", "text": "<@UBOT> local"},
@@ -241,9 +245,19 @@ class ListenerTests(unittest.TestCase):
              patch.object(slack, "conversations_replies", side_effect=messages) as replies, \
              patch.object(cli, "_check_session_health") as health, \
              patch.object(cli.time, "sleep", side_effect=sleep), \
+             patch.object(cli.wake.shutil, "which", return_value="/mock/codex"), \
+             patch.object(cli.wake.subprocess, "Popen") as queue, \
+             patch.object(cli.wake, "schedule", side_effect=cli.wake.tick), \
              patch.object(cli, "_log"):
+            queue.return_value.communicate.return_value = (f"Queued message receipt for thread {target}.", "")
+            queue.return_value.returncode = 0
             cli.cmd_keeper(["--thread", "100.0"])
         self.assertEqual([m["user"] for m in threads.read_inbox("100.0", 0)], ["UA", "UB"])
+        queue.assert_called_once()
+        data = json.loads(queue.call_args.args[0][5].split("\n", 1)[1])
+        self.assertEqual(data["sender"], "UA")
+        self.assertEqual(data["ts"], "102.0")
+        self.assertEqual(threads.load("100.0")["wake_last_queued_ts"], "102.0")
         self.assertEqual(cfg.channel_listeners("CCHAN"), ["UB"])
         self.assertEqual(set(health.call_args.args[-2]), {"UA", "UB"})
         for call in replies.call_args_list:

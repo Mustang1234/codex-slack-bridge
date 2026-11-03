@@ -42,7 +42,7 @@ SECRET_PATTERNS = [
 # 실패했을 때 무엇을 해야 하는지가 바로 나와야 한다. Slack 이 주는 코드만으로는
 # 설치하는 사람이 다음 행동을 못 정한다.
 ERROR_HINTS = {
-    "not_in_channel": "봇이 그 채널에 없습니다. Slack 에서 `/invite @Claude Bridge` 로 초대하세요.",
+    "not_in_channel": "봇이 그 채널에 없습니다. Slack 에서 `/invite @Codex Bridge` 로 초대하세요.",
     "channel_not_found": "채널 ID 를 찾을 수 없습니다. 비공개 채널이면 봇을 먼저 초대해야 보입니다.",
     "invalid_auth": "토큰이 유효하지 않습니다. `xoxb-` 로 시작하는 Bot User OAuth Token 인지 확인하세요.",
     "account_inactive": "앱이 워크스페이스에서 비활성화됐습니다.",

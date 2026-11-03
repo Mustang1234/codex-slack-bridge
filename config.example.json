@@ -3,5 +3,6 @@
   "channel": "C여기에-채널ID",
   "owner_id": "U여기에-멤버ID",
   "display_name": "",
-  "icon_emoji": ""
+  "icon_emoji": "",
+  "wake_enabled": true
 }

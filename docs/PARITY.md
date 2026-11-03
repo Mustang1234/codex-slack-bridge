@@ -1,3 +1,5 @@
+> 역사 자료: 원본 ntfy/Claude 구현 비교 기록이다. 아래 이름·경로는 과거 구현의 인용이며 Codex 설정 지침이 아니다. 현재 전환 상태는 [CODEX_PORT.md](CODEX_PORT.md)를 참고한다.
+
 # ntfy → Slack 기능 이식 인벤토리
 
 판정 범위는 `ntfy_pool.py`, `ntfy_listen.py`, `notify.py`, `ntfy_caffeinate.py`의 실행 코드 전체와, 실제 운용 호출 경로를 확인하기 위한 `.claude/commands/ntfy-*.md`, `notify.md`이다. 주석에만 있는 계획은 기능으로 세지 않았다. 현재 정상 경로는 `hold → supervise-start → watch → caffeinate on`, 수신 후 `notify.py`로 응답하고 `watch`를 다시 띄우며, 종료는 `stop → caffeinate off → release`이다. `listen`은 디스패치 가능한 코드지만 운용 문서가 명시한 구방식이다.

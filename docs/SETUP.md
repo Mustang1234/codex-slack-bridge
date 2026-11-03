@@ -1,11 +1,11 @@
 # 설치
 
-**이 문서를 읽지 않아도 된다.** `claude-slack-bridge init` 이 같은 내용을 터미널
+**이 문서를 읽지 않아도 된다.** `codex-slack-bridge init` 이 같은 내용을 터미널
 안에서 순서대로 안내하고, 각 단계가 실제로 됐는지 검사까지 한다. 아래는 미리
 훑어보고 싶을 때 보는 것이다.
 
 ```bash
-uvx --from git+https://github.com/Mustang1234/claude-slack-bridge claude-slack-bridge init
+uvx --from git+https://github.com/Mustang1234/codex-slack-bridge codex-slack-bridge init
 ```
 
 브라우저에서 하는 일과 터미널에서 하는 일이 나뉜다. 브라우저 쪽이 먼저다.
@@ -20,7 +20,7 @@ uvx --from git+https://github.com/Mustang1234/claude-slack-bridge claude-slack-b
 3. 워크스페이스 선택
 4. 아래 명령으로 매니페스트를 출력해 통째로 붙여넣고 `Next` → `Create`
    ```bash
-   claude-slack-bridge manifest
+   codex-slack-bridge manifest
    ```
 5. 좌측 `OAuth & Permissions` → `Install to Workspace` → `Allow`
 6. `Bot User OAuth Token` 복사 — `xoxb-` 로 시작한다
@@ -41,8 +41,8 @@ uvx --from git+https://github.com/Mustang1234/claude-slack-bridge claude-slack-b
 
 목적지는 공개 채널·비공개 채널·봇과의 DM 중 하나다. 채널을 쓸 때는:
 
-1. 받을 공개 또는 비공개 채널을 고르거나 만든다 (예: `#claude-알림`)
-2. 그 채널에서 `/invite @Claude Bridge` 로 봇을 초대한다
+1. 받을 공개 또는 비공개 채널을 고르거나 만든다 (예: `#codex-알림`)
+2. 그 채널에서 `/invite @Codex Bridge` 로 봇을 초대한다
 3. 채널 이름 우클릭 → `링크 복사` → URL 끝의 `C` 로 시작하는 문자열이 채널 ID 다
 
 채널에 앱을 추가할 권한이 없으면 봇과의 DM을 고른다. DM에는 초대나 채널 ID가 필요 없다.
@@ -53,41 +53,53 @@ uvx --from git+https://github.com/Mustang1234/claude-slack-bridge claude-slack-b
 ## 3. 설정 (터미널)
 
 ```bash
-claude-slack-bridge init
+codex-slack-bridge init
 ```
 
 토큰(입력이 화면에 표시되지 않는다) → 내 멤버 ID → 공개 채널·비공개 채널·DM 목적지
 순으로 물어본다. 토큰 유효성과 채널을 골랐을 때의 봇 초대 여부를 확인하고 테스트 메시지를
-보낸 뒤 `~/.claude-slack-bridge/config.json` 에 권한 600 으로 저장한다. 폰에 테스트 메시지가
+보낸 뒤 `~/.codex-slack-bridge/config.json` 에 권한 600 으로 저장한다. 폰에 테스트 메시지가
 뜨면 성공이다.
 
 손으로 만들고 싶으면 이렇게 해도 된다.
 
 ```bash
-mkdir -p ~/.claude-slack-bridge
-cat > ~/.claude-slack-bridge/config.json <<'JSON'
+mkdir -p ~/.codex-slack-bridge
+cat > ~/.codex-slack-bridge/config.json <<'JSON'
 {
   "bot_token": "xoxb-...",
   "channel": "C...",
   "owner_id": "U..."
 }
 JSON
-chmod 600 ~/.claude-slack-bridge/config.json
+chmod 600 ~/.codex-slack-bridge/config.json
 ```
 
-환경변수 `SLACK_BOT_TOKEN` / `SLACK_CHANNEL` 은 설정 파일보다 우선한다. `owner_id`는 설정 파일 값을 우선하고, 비어 있을 때만 `SLACK_OWNER_ID`를 쓴다.
+환경변수 `CODEX_SLACK_BRIDGE_BOT_TOKEN` / `CODEX_SLACK_BRIDGE_CHANNEL` 은 설정 파일보다 우선한다. `owner_id`는 설정 파일 값을 우선하고, 비어 있을 때만 `CODEX_SLACK_BRIDGE_OWNER_ID`를 쓴다.
 
-이미 설정한 뒤 상태를 확인하려면 `claude-slack-bridge doctor` 를 쓴다.
+이미 설정한 뒤 상태를 확인하려면 `codex-slack-bridge doctor` 를 쓴다.
 
-## 4. Claude Code 에 붙이기
+## 4. Codex CLI 에 붙이기
 
 ```bash
-claude mcp add claude-slack-bridge -s user -- \
-  uvx --from git+https://github.com/Mustang1234/claude-slack-bridge claude-slack-bridge
+codex mcp add codex-slack-bridge -- \
+  uvx --from git+https://github.com/Mustang1234/codex-slack-bridge codex-slack-bridge
 ```
 
-`-s user` 는 모든 프로젝트에서 쓰겠다는 뜻이다. 알림은 어느 프로젝트에서 일하든
-받아야 하므로 이 범위가 맞다.
+설정은 `~/.codex/config.toml`의 `[mcp_servers.codex-slack-bridge]`에 저장된다.
+직접 작성할 때는 다음과 같다:
+
+```toml
+[mcp_servers.codex-slack-bridge]
+command = "uvx"
+args = ["--from", "git+https://github.com/Mustang1234/codex-slack-bridge", "codex-slack-bridge"]
+tool_timeout_sec = 60
+```
+
+대기는 `slack_wait_reply(timeout_seconds=30)`처럼 MCP 호출 제한보다 짧게 한다.
+승인·샌드박스 정책은 Codex 설정을 따르며 이 브리지는 권한을 자동 변경하지 않는다.
+위 원격 설치는 포팅 커밋이 게시된 뒤 사용한다. 현재 로컬 검토에는 `command`를
+이 체크아웃의 `.venv/bin/codex-slack-bridge` 절대 경로로 지정하고 `args = []`로 둔다.
 
 `--from` 을 빼면 안 된다. 이 패키지는 PyPI 에 없어서 uvx 가 가져올 곳을 모르고,
 `No solution found when resolving tool dependencies` 로 떨어진다.
